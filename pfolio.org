@@ -1,11 +1,45 @@
 #+TITLE: Pfolio
 
 * operations
+
+# regex for debug
+(\(^\)\(.*\)\(TRADE_DEBUG\) → \1//\2\3)
+(\(^\)\( *\)\(//\)\(.*\)\(TRADE_DEBUG\) → \1\2\4\5)
+
+# initial setup for hardhat console
 #+begin_src js
 const account = await ethers.getSigners().then((accounts) => accounts[0].address);
 const pfolio = await ethers.getContractAt("PFOLIO", "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512");
 const token1 = await ethers.getContractAt("ERC20PresetMinterPauser", "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0");
 const token2 = await ethers.getContractAt("ERC20PresetMinterPauser", "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9");
+const token3 = await ethers.getContractAt("ERC20PresetMinterPauser", "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9");
 tstr = (n) => n.toString();
 await pfolio.getBalance(token1.address).then(tstr);
+let ONE = Math.pow(10, 18);
+let priceOne = Math.pow(10, 18);
+let tradeOne = Math.pow(10, 11);
 #+end_src
+
+* pricing
+# pricing function dependencies
+ - _queryBuyBaseToken
+   + _RAboveBuyBaseToken
+     - _RAboveIntegrate: _GeneralIntegrate(targetBaseAmount, baseBalance, baseBalance.sub(amount), i, K)
+   + _ROneBuyBaseToken
+     - _RAboveIntegrate: _GeneralIntegrate(targetBaseTokenAmount, targetBaseTokenAmount, targetBaseTokenAmount.sub(amount), i, K)
+   + _RBelowBuyBaseToken
+     - _SolveQuadraticFunctionForTrade (targetQuoteAmount,quoteBalance,DecimalMath.mulCeil(i, amount),true,K)
+ - _querySellBaseToken
+   + _RAboveSellBaseToken
+     - _RAboveIntegrate: _GeneralIntegrate(targetBaseAmount, baseBalance.add(amount), baseBalance, i, K)
+   + _ROneSellBaseToken
+     - _SolveQuadraticFunctionForTrade (targetQuoteTokenAmount,targetQuoteTokenAmount,DecimalMath.mul(i, amount),false,K)
+   + _RBelowSellBaseToken
+     - _SolveQuadraticFunctionForTrade (targetQuoteAmount,quoteBalance,DecimalMath.mul(i, amount),false,K)
+ - getExpectedTarget
+   - _RBelowBackToOne
+     + _SolveQuadraticFunctionForTarget (baseToken.balance,K,divFloor(spareBase, price))
+   - _RAboveBackToOne
+     + _SolveQuadraticFunctionForTarget (baseToken.balance,K,divFloor(spareQuote, price))
+ - _SolveQuadraticFunctionForTarget
+ - _GeneralIntegrate
