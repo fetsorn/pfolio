@@ -1,0 +1,11 @@
+#+TITLE: Pfolio
+
+* operations
+#+begin_src js
+const account = await ethers.getSigners().then((accounts) => accounts[0].address);
+const pfolio = await ethers.getContractAt("PFOLIO", "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512");
+const token1 = await ethers.getContractAt("ERC20PresetMinterPauser", "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0");
+const token2 = await ethers.getContractAt("ERC20PresetMinterPauser", "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9");
+tstr = (n) => n.toString();
+await pfolio.getBalance(token1.address).then(tstr);
+#+end_src
