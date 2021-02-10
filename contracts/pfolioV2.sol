@@ -865,7 +865,74 @@ contract Storage {
     {
         // TODO: fails ungracefully on unbound tokens
         // TODO: mock function, will take pricefeeds from oracles
+        // TODO: choose the sort of division - floor, ceiling
         return DecimalMath.divFloor(getOraclePrice(base), getOraclePrice(quote));
+    }
+
+    function getPortfolioValue() public view returns (uint256) {
+
+        uint i;
+        address token;
+        uint256 value;
+        uint256 wholeValue = 0;
+
+        // console.log("_tokens length is %s", _tokens.length); // ORACLE_DEBUG
+
+        for(i = 0; i < _tokens.length; i++) {
+          token = _tokens[i];
+          value = _records[token].balance.mul(getOraclePrice(token)); // balance * price
+
+        // console.log("token %s value is %s", i+1, value); // ORACLE_DEBUG
+
+          wholeValue = wholeValue.add(value);
+        }
+
+        return wholeValue;
+    }
+
+
+    function getCurrentShare(address asset) public view returns (uint256) {
+
+        uint256 assetValue = _records[asset].balance.mul(getOraclePrice(asset));
+
+        // console.log("token value is %s", value); // ORACLE_DEBUG
+
+        uint256 wholeValue = getPortfolioValue();
+
+        return DecimalMath.divFloor(assetValue, wholeValue);
+    }
+
+    // TODO: add to record, update on all balance changes
+     function getShare(address base,
+                       address quote,
+                       uint256 baseBalanceAfterTx,
+                       uint256 quoteBalanceAfterTx
+                       ) public view returns (uint256 baseShare, uint256 quoteShare) {
+        // take price of token1 in usd
+        // take price of all tokens in usd - in state?
+        /// add all shares of tokens from balances
+        // decimal divide
+
+        uint256 baseValueBeforeTx = _records[base].balance.mul(getOraclePrice(base));
+        uint256 quoteValueBeforeTx = _records[quote].balance.mul(getOraclePrice(quote));
+
+        uint256 baseValueAfterTx = baseBalanceAfterTx.mul(getOraclePrice(base));
+        uint256 quoteValueAfterTx = quoteBalanceAfterTx.mul(getOraclePrice(quote));
+
+        // console.log("token value is %s", value); // ORACLE_DEBUG
+
+        uint256 wholeValueBeforeTx = getPortfolioValue();
+
+        uint256 wholeValueAfterTx = wholeValueBeforeTx.add(baseValueAfterTx).add(quoteValueAfterTx);
+        wholeValueAfterTx = wholeValueAfterTx.sub(baseValueBeforeTx).sub(quoteValueBeforeTx);
+
+        // console.log("whole value is %s", wholeValueAfterTx); // ORACLE_DEBUG
+
+        uint256 baseShareAfterTx = DecimalMath.divFloor(baseValueAfterTx, wholeValueAfterTx);
+        uint256 quoteShareAfterTx = DecimalMath.divFloor(quoteValueAfterTx, wholeValueAfterTx);
+
+        return (baseShareAfterTx, quoteShareAfterTx);
+
     }
 
     function setK(uint256 k) external returns (uint256) {
@@ -1642,64 +1709,6 @@ contract Pricing is Storage {
 contract Trading is Pricing {
     using SafeMath for uint256;
 
-    // ============ Assets IN/OUT Functions ============
-
-    function _baseTokenTransferIn(
-        address base,
-        address from,
-        uint256 amount
-    ) public {
-        // console.log("_baseTokenTransferIn (base, from, amount)"); //TRADE_DEBUG
-        Record memory baseToken = _records[base];
-        require(
-            baseToken.balance.add(amount) <= baseToken.balanceLimit,
-            "BASE_BALANCE_LIMIT_EXCEEDED"
-        );
-        IERC20(base).transferFrom(from, address(this), amount);
-        baseToken.balance = baseToken.balance.add(amount);
-        // console.log("_baseTokenTransferIn baseBalance is %s", baseToken.balance); //TRADE_DEBUG
-    }
-
-    function _quoteTokenTransferIn(
-        address quote,
-        address from,
-        uint256 amount
-    ) public {
-        // console.log("_quoteTokenTransferIn (quote, from, amount)"); //TRADE_DEBUG
-        Record memory quoteToken = _records[quote];
-        require(
-            quoteToken.balance.add(amount) <= quoteToken.balanceLimit,
-            "QUOTE_BALANCE_LIMIT_EXCEEDED"
-        );
-        IERC20(quote).transferFrom(from, address(this), amount);
-        quoteToken.balance = quoteToken.balance.add(amount);
-    }
-
-    function _baseTokenTransferOut(
-        address base,
-        address to,
-        uint256 amount
-    ) public {
-        // console.log("_baseTokenTransferOut (base, to, amount)"); //TRADE_DEBUG
-        Record memory baseToken = _records[base];
-        IERC20(base).transfer(to, amount);
-        baseToken.balance = baseToken.balance.sub(amount);
-    }
-
-    function _quoteTokenTransferOut(
-        address quote,
-        address to,
-        uint256 amount
-    ) public {
-        // console.log("_quoteTokenTransferOut (quote, to, amount)"); //TRADE_DEBUG
-        Record memory quoteToken = _records[quote];
-        IERC20(quote).transfer(to, amount);
-        quoteToken.balance = quoteToken.balance.sub(amount);
-        // console.log("_quoteTokenTransferOut quoteBalance is %s", quoteToken.balance); //TRADE_DEBUG
-    }
-
-    // Trader
-
     // ============ Events ============
 
     event SellBaseToken(
@@ -1750,6 +1759,30 @@ contract Trading is Pricing {
             "SELL_BASE_RECEIVE_NOT_ENOUGH"
         );
 
+        // console.log("baseShare is %s, quoteShare is %s", getCurrentShare(base), getCurrentShare(quote)); // ORACLE_DEBUG
+
+        // calculate share after tx
+        // share needs base after transaction and quote balance after transaction
+        // it will calculate value of base balanceAfterTx
+        // it will calculate value of portfolio
+        // add up all assets,
+        // subtract balancesBeforeTx of base and quote
+        // add balancesAfterTx
+        // divide baseValue by wholeValue
+        (uint256 baseShare,
+         uint256 quoteShare) = getShare(base,
+                                        quote,
+                                        baseToken.balance + amount,
+                                        quoteToken.balance - receiveQuote
+                                        );
+
+        // console.log("baseShare will be %s, quoteShare will be %s", baseShare, quoteShare); // ORACLE_DEBUG
+
+        // TODO: move share limits to asset records
+        // share of base and quote after tx should be within share limits
+        uint256 ONE = 10**18;
+        require(3*ONE/10 <= baseShare  && baseShare  <= 7*ONE/10, "BASE OUTSIDE LIMITS" );
+        require(3*ONE/10 <= quoteShare && quoteShare <= 7*ONE/10, "QUOTE OUTSIDE LIMITS");
         // settle assets
         _quoteTokenTransferOut(quote, msg.sender, receiveQuote);
 
@@ -1811,6 +1844,63 @@ contract Trading is Pricing {
 
         return payQuote;
     }
+
+        // ============ Assets IN/OUT Functions ============
+
+    function _baseTokenTransferIn(
+        address base,
+        address from,
+        uint256 amount
+    ) public {
+        // console.log("_baseTokenTransferIn (base, from, amount)"); //TRADE_DEBUG
+        Record memory baseToken = _records[base];
+        require(
+            baseToken.balance.add(amount) <= baseToken.balanceLimit,
+            "BASE_BALANCE_LIMIT_EXCEEDED"
+        );
+        IERC20(base).transferFrom(from, address(this), amount);
+        baseToken.balance = baseToken.balance.add(amount);
+        // console.log("_baseTokenTransferIn baseBalance is %s", baseToken.balance); //TRADE_DEBUG
+    }
+
+    function _quoteTokenTransferIn(
+        address quote,
+        address from,
+        uint256 amount
+    ) public {
+        // console.log("_quoteTokenTransferIn (quote, from, amount)"); //TRADE_DEBUG
+        Record memory quoteToken = _records[quote];
+        require(
+            quoteToken.balance.add(amount) <= quoteToken.balanceLimit,
+            "QUOTE_BALANCE_LIMIT_EXCEEDED"
+        );
+        IERC20(quote).transferFrom(from, address(this), amount);
+        quoteToken.balance = quoteToken.balance.add(amount);
+    }
+
+    function _baseTokenTransferOut(
+        address base,
+        address to,
+        uint256 amount
+    ) public {
+        // console.log("_baseTokenTransferOut (base, to, amount)"); //TRADE_DEBUG
+        Record memory baseToken = _records[base];
+        IERC20(base).transfer(to, amount);
+        baseToken.balance = baseToken.balance.sub(amount);
+    }
+
+    function _quoteTokenTransferOut(
+        address quote,
+        address to,
+        uint256 amount
+    ) public {
+        // console.log("_quoteTokenTransferOut (quote, to, amount)"); //TRADE_DEBUG
+        Record memory quoteToken = _records[quote];
+        IERC20(quote).transfer(to, amount);
+        quoteToken.balance = quoteToken.balance.sub(amount);
+        // console.log("_quoteTokenTransferOut quoteBalance is %s", quoteToken.balance); //TRADE_DEBUG
+    }
+
 }
 
 contract LiquidityProvider is Storage, LPToken {

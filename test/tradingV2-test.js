@@ -141,11 +141,10 @@ describe("PFOLIO V2 trading", function () {
     });
 
     it("Should sell 1/1", async function () {
-       const priceBase  = (1*priceOne).toString();
-       const priceQuote = (1*priceOne).toString();
+      const price  = (1*priceOne).toString();
 
-      await pfolio.setOraclePrice(token1.address, priceBase);
-      await pfolio.setOraclePrice(token2.address, priceQuote);
+      await pfolio.setOraclePrice(token1.address, price);
+      await pfolio.setOraclePrice(token2.address, price);
 
       let balance1_1 = await token1
         .balanceOf(owner.address)
@@ -186,5 +185,6 @@ describe("PFOLIO V2 trading", function () {
       expect((balance1_1 - balance1_2) / tradeOne).to.within(4.9, 5.1);
       expect((balance2_2 - balance2_1) / tradeOne).to.within(4.9, 5.1);
     });
+
   });
 });
