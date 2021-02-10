@@ -837,23 +837,35 @@ contract Storage {
         return _controller;
     }
 
-    function getOraclePrice(address base, address quote)
+    function getOraclePrice(address token)
         public
         view
         returns (uint256)
     {
-        // return IOracle(_ORACLE_).getPrice();
-        // return 5 * (10**3);
-        return _oracles[base][quote];
+        // TODO: fails ungracefully on unbound tokens
+        // TODO: mock function, will take pricefeeds from oracles
+        // TODO: assumes all pricefeeds have the same precision, will have to convert in prod
+        return _prices[token];
     }
 
     function setOraclePrice(
-        address base,
-        address quote,
+        address token,
         uint256 price
     ) external returns (uint256) {
-        _oracles[base][quote] = price;
-        return _oracles[base][quote];
+        // TODO: fails ungracefully on unbound tokens
+        // TODO: mock function, will take pricefeeds from oracles
+        _prices[token] = price;
+        return _prices[token];
+    }
+
+    function getTransactionPrice(address base, address quote)
+        public
+        view
+        returns (uint256)
+    {
+        // TODO: fails ungracefully on unbound tokens
+        // TODO: mock function, will take pricefeeds from oracles
+        return DecimalMath.divFloor(getOraclePrice(base), getOraclePrice(quote));
     }
 
     function setK(uint256 k) external returns (uint256) {
@@ -879,7 +891,7 @@ contract Storage {
     address public _SUPERVISOR_; // could freeze system in emergency
     address public _MAINTAINER_; // collect maintainer fee to buy food for DODO
 
-    mapping(address => mapping(address => uint256)) internal _oracles;
+    mapping(address => uint256) internal _prices;
 
     // ============ Variables for PMM Algorithm ============
 
@@ -1428,7 +1440,7 @@ contract Pricing is Storage {
         // console.log("ROneSellBaseToken (base, quote, amount, targetQuoteTokenAmount)"); //PRICE_DEBUG
         // console.log("ROneSellBaseToken (base, quote, %s, %s)", amount, targetQuoteTokenAmount); //PRICE_DEBUG
 
-        uint256 i = getOraclePrice(base, quote);
+        uint256 i = getTransactionPrice(base, quote);
         // console.log("ROneSellBaseToken: Price is %s", i); //PRICE_DEBUG
 
         // console.log("SolveQuadraticFunctionForTrade (targetQuote, targetQuote, i*amount, false, k)"); //PRICE_DEBUG
@@ -1483,7 +1495,7 @@ contract Pricing is Storage {
         uint256 quoteBalance,
         uint256 targetQuoteAmount
     ) public view returns (uint256 receieQuoteToken) {
-        uint256 i = getOraclePrice(base, quote);
+        uint256 i = getTransactionPrice(base, quote);
         uint256 Q2 =
             DODOMath._SolveQuadraticFunctionForTrade(
                 targetQuoteAmount,
@@ -1505,7 +1517,7 @@ contract Pricing is Storage {
         // Here we don't require amount less than some value
         // Because it is limited at upper function
         // See Trader.queryBuyBaseToken
-        uint256 i = getOraclePrice(base, quote);
+        uint256 i = getTransactionPrice(base, quote);
         uint256 Q2 =
             DODOMath._SolveQuadraticFunctionForTrade(
                 targetQuoteAmount,
@@ -1524,7 +1536,7 @@ contract Pricing is Storage {
     {
         // important: carefully design the system to make sure spareBase always greater than or equal to 0
         uint256 spareBase = baseToken.balance.sub(baseToken.targetTokenAmount);
-        uint256 price = getOraclePrice(baseToken.token, quoteToken.token);
+        uint256 price = getTransactionPrice(baseToken.token, quoteToken.token);
         uint256 fairAmount = DecimalMath.mul(spareBase, price);
         uint256 newTargetQuote =
             DODOMath._SolveQuadraticFunctionForTarget(
@@ -1571,7 +1583,7 @@ contract Pricing is Storage {
         // important: carefully design the system to make sure spareBase always greater than or equal to 0
         uint256 spareQuote =
             quoteToken.balance.sub(quoteToken.targetTokenAmount);
-        uint256 price = getOraclePrice(baseToken.token, quoteToken.token);
+        uint256 price = getTransactionPrice(baseToken.token, quoteToken.token);
         uint256 fairAmount = DecimalMath.divFloor(spareQuote, price);
         uint256 newTargetBase =
             DODOMath._SolveQuadraticFunctionForTarget(
@@ -1621,7 +1633,7 @@ contract Pricing is Storage {
     ) public view returns (uint256) {
         // console.log("RAboveIntegrate   (base, quote, B0, B1, B2)"); //PRICE_DEBUG
         // console.log("RAboveIntegrate   (base, quote, %s, %s, %s)", B0, B1, B2); //PRICE_DEBUG
-        uint256 i = getOraclePrice(base, quote);
+        uint256 i = getTransactionPrice(base, quote);
         // console.log("RAboveIntegrate:   Price is %s", i); //PRICE_DEBUG
         return DODOMath._GeneralIntegrate(B0, B1, B2, i, _K_);
     }

@@ -56,88 +56,96 @@ describe("PFOLIO V2 trading", function () {
       expect(await pfolio.getBalance(token1.address)).to.equal(bindSize);
     });
 
-    it("Should query sell 1/1", async function () {
-      const oraclePrice = priceOne.toString();
+    it("Should query 1/1", async function () {
+       const priceBase  = (1*priceOne).toString();
+       const priceQuote = (1*priceOne).toString();
 
-      await pfolio.setOraclePrice(token1.address, token2.address, oraclePrice);
+      await pfolio.setOraclePrice(token1.address, priceBase);
+      await pfolio.setOraclePrice(token2.address, priceQuote);
 
-      let query = await pfolio
-        .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
-
-      expect(query / tradeOne).to.within(4.9, 5.1);
-    });
-
-    it("Should query buy 1/1", async function () {
-      const oraclePrice = priceOne.toString();
-
-      await pfolio.setOraclePrice(token1.address, token2.address, oraclePrice);
-
-      let query = await pfolio
+      let buy = await pfolio
         .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
         .then((n1, n2, n3, n4) => n1.toString())
         .then((s) => s.split(",")[0]);
 
-      expect(query / tradeOne).to.within(4.9, 5.1);
-    });
-
-    it("Should query buy 1/10", async function () {
-      const oraclePrice = (10 * priceOne).toString();
-
-      await pfolio.setOraclePrice(token1.address, token2.address, oraclePrice);
-
-      let query = await pfolio
-        .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
-
-      expect(query / tradeOne).to.within(49.9, 50.1);
-    });
-
-    it("Should query sell 1/10", async function () {
-      const oraclePrice = (10 * priceOne).toString();
-
-      await pfolio.setOraclePrice(token1.address, token2.address, oraclePrice);
-
-      let query = await pfolio
+      let sell = await pfolio
         .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
         .then((n1, n2, n3, n4) => n1.toString())
         .then((s) => s.split(",")[0]);
 
-      expect(query / tradeOne).to.within(49.9, 50.1);
+      expect(buy / tradeOne).to.within(4.9, 5.1);
+      expect(sell / tradeOne).to.within(4.9, 5.1);
     });
 
-    it("Should query buy 1/100", async function () {
-      const oraclePrice = (100 * priceOne).toString();
+    it("Should query 1/10", async function () {
+       const priceBase  = (10*priceOne).toString();
+       const priceQuote = (1*priceOne).toString();
 
-      await pfolio.setOraclePrice(token1.address, token2.address, oraclePrice);
+      await pfolio.setOraclePrice(token1.address, priceBase);
+      await pfolio.setOraclePrice(token2.address, priceQuote);
 
-      let query = await pfolio
+      let buy = await pfolio
         .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
         .then((n1, n2, n3, n4) => n1.toString())
         .then((s) => s.split(",")[0]);
 
-      expect(query / tradeOne).to.within(499, 501);
-    });
-
-    it("Should query sell 1/100", async function () {
-      const oraclePrice = (100 * priceOne).toString();
-
-      await pfolio.setOraclePrice(token1.address, token2.address, oraclePrice);
-
-      let query = await pfolio
+      let sell = await pfolio
         .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
         .then((n1, n2, n3, n4) => n1.toString())
         .then((s) => s.split(",")[0]);
 
-      expect(query / tradeOne).to.within(499, 501);
+      expect(buy / tradeOne).to.within(49.9, 50.1);
+      expect(sell / tradeOne).to.within(49.9, 50.1);
     });
 
-    it("Should trade sell 1/1", async function () {
-      const oraclePrice = priceOne.toString();
+    it("Should query 1/100", async function () {
+       const priceBase  = (100*priceOne).toString();
+       const priceQuote = (1*priceOne).toString();
 
-      await pfolio.setOraclePrice(token1.address, token2.address, oraclePrice);
+      await pfolio.setOraclePrice(token1.address, priceBase);
+      await pfolio.setOraclePrice(token2.address, priceQuote);
+
+      let buy = await pfolio
+        .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
+        .then((n1, n2, n3, n4) => n1.toString())
+        .then((s) => s.split(",")[0]);
+
+      let sell = await pfolio
+        .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
+        .then((n1, n2, n3, n4) => n1.toString())
+        .then((s) => s.split(",")[0]);
+
+      expect(buy / tradeOne).to.within(499, 501);
+      expect(sell / tradeOne).to.within(499, 501);
+    });
+
+    it("Should query 10/1", async function () {
+       const priceBase  = (1*priceOne).toString();
+       const priceQuote = (10*priceOne).toString();
+
+      await pfolio.setOraclePrice(token1.address, priceBase);
+      await pfolio.setOraclePrice(token2.address, priceQuote);
+
+      let buy = await pfolio
+        .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
+        .then((n1, n2, n3, n4) => n1.toString())
+        .then((s) => s.split(",")[0]);
+
+      let sell = await pfolio
+        .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
+        .then((n1, n2, n3, n4) => n1.toString())
+        .then((s) => s.split(",")[0]);
+
+      expect(buy / tradeOne).to.within(0.49, 0.51);
+      expect(sell / tradeOne).to.within(0.49, 0.51);
+    });
+
+    it("Should sell 1/1", async function () {
+       const priceBase  = (1*priceOne).toString();
+       const priceQuote = (1*priceOne).toString();
+
+      await pfolio.setOraclePrice(token1.address, priceBase);
+      await pfolio.setOraclePrice(token2.address, priceQuote);
 
       let balance1_1 = await token1
         .balanceOf(owner.address)
