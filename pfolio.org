@@ -3,8 +3,8 @@
 * operations
 
 # regex for debug
-(\(^\)\(.*\)\(TRADE_DEBUG\) → \1//\2\3)
-(\(^\)\( *\)\(//\)\(.*\)\(TRADE_DEBUG\) → \1\2\4\5)
+\(^\)\( *\)\(.*\)\(PRICE_DEBUG\) → \1\2// \3\4
+\(^\)\( *\)\(// \)\(.*\)\(PRICE_DEBUG\) → \1\2\4\5
 
 # initial setup for hardhat console
 #+begin_src js

@@ -1,6 +1,6 @@
 const { expect } = require("chai");
 
-describe("PFOLIO trading", function () {
+describe("PFOLIO V2 trading", function () {
   let PFOLIO;
   let pfolio;
   let Token;
@@ -17,7 +17,7 @@ describe("PFOLIO trading", function () {
   tstr = (n) => n.toString();
 
   beforeEach(async function () {
-    PFOLIO = await hre.ethers.getContractFactory("PFOLIO");
+    PFOLIO = await hre.ethers.getContractFactory("PFOLIOV2");
     pfolio = await PFOLIO.deploy();
 
     Token = await ethers.getContractFactory("ERC20PresetMinterPauser");
