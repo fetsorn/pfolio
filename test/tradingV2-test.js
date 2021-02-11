@@ -1,4 +1,8 @@
-const { expect } = require("chai");
+var chai = require("chai");
+
+chai.use(require("chai-as-promised"));
+
+var expect = chai.expect;
 
 describe("PFOLIO V2 trading", function () {
   let PFOLIO;
@@ -11,7 +15,6 @@ describe("PFOLIO V2 trading", function () {
   let addrs;
   let fundSize;
   let priceOne;
-  let tradeOne;
 
   let ten = ethers.BigNumber.from("10");
   let ONE = ten.pow(18);
@@ -20,10 +23,8 @@ describe("PFOLIO V2 trading", function () {
   let min = PERCENT.mul(30);
   let max = PERCENT.mul(70);
 
-  tstr = (n) => n.toString();
-
   beforeEach(async function () {
-    PFOLIO = await hre.ethers.getContractFactory("PFOLIOV2");
+    PFOLIO = await hre.ethers.getContractFactory("PFOLIO");
     pfolio = await PFOLIO.deploy();
 
     Token = await ethers.getContractFactory("ERC20PresetMinterPauser");
@@ -33,7 +34,7 @@ describe("PFOLIO V2 trading", function () {
     token2 = await Token.deploy("silver", "AG");
     token3 = await Token.deploy("bronze", "BZ");
 
-    fundSize = Math.pow(10, 19).toString();
+    fundSize = ten.pow(19);
 
     await token1.mint(owner.address, fundSize);
     await token2.mint(owner.address, fundSize);
@@ -47,148 +48,173 @@ describe("PFOLIO V2 trading", function () {
     await pfolio.bind(token2.address, bindSize, min, max);
     await pfolio.bind(token3.address, bindSize, min, max);
 
-    priceOne = Math.pow(10, 18);
-    tradeOne = Math.pow(10, 11);
+    priceOne = ten.pow(18);
   });
 
-  describe("Deployment", function () {
-    it("Should set the right token name", async function () {
-      expect(await token1.name()).to.equal("gold");
-    });
+  it("Should query 1/1", async function () {
+    const priceBase = priceOne.mul(1);
+    const priceQuote = priceOne.mul(1);
 
-    it("Should bind 10^17 to pool", async function () {
-      expect(await pfolio.getBalance(token1.address)).to.equal(bindSize);
-    });
+    await pfolio.setOraclePrice(token1.address, priceBase);
+    await pfolio.setOraclePrice(token2.address, priceQuote);
 
-    it("Should query 1/1", async function () {
-       const priceBase  = (1*priceOne).toString();
-       const priceQuote = (1*priceOne).toString();
+    let buy = await pfolio.queryBuyBaseToken(
+      token1.address,
+      token2.address,
+      ten.pow(11).mul(5)
+    );
 
-      await pfolio.setOraclePrice(token1.address, priceBase);
-      await pfolio.setOraclePrice(token2.address, priceQuote);
+    let sell = await pfolio.querySellBaseToken(
+      token1.address,
+      token2.address,
+      ten.pow(11).mul(5)
+    );
 
-      let buy = await pfolio
-        .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+    let lower = ten.pow(11).mul(49).div(10); // 4.9
+    let upper = ten.pow(11).mul(51).div(10); // 5.1
+    expect(buy.gte(lower)).to.be.true;
+    expect(buy.lte(upper)).to.be.true;
+    expect(sell.gte(lower)).to.be.true;
+    expect(sell.lte(upper)).to.be.true;
+  });
 
-      let sell = await pfolio
-        .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+  it("Should query 1/10", async function () {
+    const priceBase = priceOne.mul(10);
+    const priceQuote = priceOne.mul(1);
 
-      expect(buy / tradeOne).to.within(4.9, 5.1);
-      expect(sell / tradeOne).to.within(4.9, 5.1);
-    });
+    await pfolio.setOraclePrice(token1.address, priceBase);
+    await pfolio.setOraclePrice(token2.address, priceQuote);
 
-    it("Should query 1/10", async function () {
-       const priceBase  = (10*priceOne).toString();
-       const priceQuote = (1*priceOne).toString();
+    let tradeOne = ten.pow(11);
 
-      await pfolio.setOraclePrice(token1.address, priceBase);
-      await pfolio.setOraclePrice(token2.address, priceQuote);
+    let buy = await pfolio.queryBuyBaseToken(
+      token1.address,
+      token2.address,
+      tradeOne.mul(5)
+    );
 
-      let buy = await pfolio
-        .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+    let sell = await pfolio.querySellBaseToken(
+      token1.address,
+      token2.address,
+      tradeOne.mul(5)
+    );
 
-      let sell = await pfolio
-        .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+    let lower = tradeOne.mul(499).div(10); // 49.9
+    let upper = tradeOne.mul(511).div(10); // 50.1
+    expect(buy.gte(lower)).to.be.true;
+    expect(buy.lte(upper)).to.be.true;
+    expect(sell.gte(lower)).to.be.true;
+    expect(sell.lte(upper)).to.be.true;
+  });
 
-      expect(buy / tradeOne).to.within(49.9, 50.1);
-      expect(sell / tradeOne).to.within(49.9, 50.1);
-    });
+  it("Should query 1/100", async function () {
+    const priceBase = priceOne.mul(100);
+    const priceQuote = priceOne.mul(1);
 
-    it("Should query 1/100", async function () {
-       const priceBase  = (100*priceOne).toString();
-       const priceQuote = (1*priceOne).toString();
+    await pfolio.setOraclePrice(token1.address, priceBase);
+    await pfolio.setOraclePrice(token2.address, priceQuote);
 
-      await pfolio.setOraclePrice(token1.address, priceBase);
-      await pfolio.setOraclePrice(token2.address, priceQuote);
+    let tradeOne = ten.pow(11);
 
-      let buy = await pfolio
-        .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+    let buy = await pfolio.queryBuyBaseToken(
+      token1.address,
+      token2.address,
+      tradeOne.mul(5)
+    );
 
-      let sell = await pfolio
-        .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+    let sell = await pfolio.querySellBaseToken(
+      token1.address,
+      token2.address,
+      tradeOne.mul(5)
+    );
 
-      expect(buy / tradeOne).to.within(499, 501);
-      expect(sell / tradeOne).to.within(499, 501);
-    });
+    let lower = tradeOne.mul(499).div(1); // 499
+    let upper = tradeOne.mul(501).div(1); // 501
+    expect(buy.gte(lower)).to.be.true;
+    expect(buy.lte(upper)).to.be.true;
+    expect(sell.gte(lower)).to.be.true;
+    expect(sell.lte(upper)).to.be.true;
+  });
 
-    it("Should query 10/1", async function () {
-       const priceBase  = (1*priceOne).toString();
-       const priceQuote = (10*priceOne).toString();
+  it("Should query 10/1", async function () {
+    const priceBase = priceOne.mul(1);
+    const priceQuote = priceOne.mul(10);
 
-      await pfolio.setOraclePrice(token1.address, priceBase);
-      await pfolio.setOraclePrice(token2.address, priceQuote);
+    await pfolio.setOraclePrice(token1.address, priceBase);
+    await pfolio.setOraclePrice(token2.address, priceQuote);
 
-      let buy = await pfolio
-        .queryBuyBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+    let tradeOne = ten.pow(11);
 
-      let sell = await pfolio
-        .querySellBaseToken(token1.address, token2.address, 5 * tradeOne)
-        .then((n1, n2, n3, n4) => n1.toString())
-        .then((s) => s.split(",")[0]);
+    let buy = await pfolio.queryBuyBaseToken(
+      token1.address,
+      token2.address,
+      tradeOne.mul(5)
+    );
 
-      expect(buy / tradeOne).to.within(0.49, 0.51);
-      expect(sell / tradeOne).to.within(0.49, 0.51);
-    });
+    let sell = await pfolio.querySellBaseToken(
+      token1.address,
+      token2.address,
+      tradeOne.mul(5)
+    );
 
-    it("Should sell 1/1", async function () {
-      const price  = (1*priceOne).toString();
+    let lower = tradeOne.mul(49).div(100); // 0.49
+    let upper = tradeOne.mul(51).div(100); // 0.51
+    expect(buy.gte(lower)).to.be.true;
+    expect(buy.lte(upper)).to.be.true;
+    expect(sell.gte(lower)).to.be.true;
+    expect(sell.lte(upper)).to.be.true;
+  });
 
-      await pfolio.setOraclePrice(token1.address, price);
-      await pfolio.setOraclePrice(token2.address, price);
+  it("Should sell 1/1", async function () {
+    const price = priceOne.mul(1);
 
-      let balance1_1 = await token1
-        .balanceOf(owner.address)
-        .then(tstr)
-        .then(parseInt);
-      let balance2_1 = await token2
-        .balanceOf(owner.address)
-        .then(tstr)
-        .then(parseInt);
+    await pfolio.setOraclePrice(token1.address, price);
+    await pfolio.setOraclePrice(token2.address, price);
 
-      // console.log(
-      //   "Owner has token1:",
-      //   balance1_1 / tradeOne,
-      //   "token2:",
-      //   balance2_1 / tradeOne
-      // );
+    let balance1_1 = await token1.balanceOf(owner.address);
+    let balance2_1 = await token2.balanceOf(owner.address);
 
-      await pfolio
-        .sellBaseToken(token1.address, token2.address, 5 * tradeOne, 1)
-        .then((n) => n.toString());
+    let tradeOne = ten.pow(11);
 
-      let balance1_2 = await token1
-        .balanceOf(owner.address)
-        .then(tstr)
-        .then(parseInt);
-      let balance2_2 = await token2
-        .balanceOf(owner.address)
-        .then(tstr)
-        .then(parseInt);
+    // console.log(
+    //   "Owner has token1:",
+    //   balance1_1.div(tradeOne).toString(),
+    //   "token2:",
+    //   balance2_1.div(tradeOne).toString()
+    // );
 
-      // console.log(
-      //   "Owner has token1:",
-      //   balance1_2 / tradeOne,
-      //   "token2:",
-      //   balance2_2 / tradeOne
-      // );
+    await pfolio.sellBaseToken(
+      token1.address,
+      token2.address,
+      tradeOne.mul(5),
+      1
+    );
 
-      expect((balance1_1 - balance1_2) / tradeOne).to.within(4.9, 5.1);
-      expect((balance2_2 - balance2_1) / tradeOne).to.within(4.9, 5.1);
-    });
+    let balance1_2 = await token1.balanceOf(owner.address);
+    let balance2_2 = await token2.balanceOf(owner.address);
 
+    // console.log(
+    //   "Owner has token1:",
+    //   balance1_2.div(tradeOne).toString(),
+    //   "token2:",
+    //   balance2_2.div(tradeOne).toString()
+    // );
+
+    let loss = balance1_1.sub(balance1_2);
+    let gain = balance2_2.sub(balance2_1);
+
+    // console.log(
+    //   "owner lost token1:",
+    //   loss.div(tradeOne).toString(),
+    //   "owner gaine token2:",
+    //   gain.div(tradeOne).toString()
+    // );
+
+    let lower = tradeOne.mul(49).div(10); // 4.9
+    let upper = tradeOne.mul(50).div(10); // 5.0
+    expect(loss.gte(lower)).to.be.true;
+    expect(loss.lte(upper)).to.be.true;
+    expect(gain.gte(lower)).to.be.true;
+    expect(gain.lte(upper)).to.be.true;
   });
 });

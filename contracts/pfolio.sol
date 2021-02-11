@@ -2,7 +2,7 @@
 pragma solidity 0.6.9;
 pragma experimental ABIEncoderV2;
 
-// import "hardhat/console.sol";
+import "hardhat/console.sol";
 
 library SafeMath {
     function mul(uint256 a, uint256 b) internal pure returns (uint256) {
@@ -254,9 +254,9 @@ library SafeERC20 {
         // we're implementing it ourselves.
 
         // A Solidity high level call has three parts:
-        //  1. The target address is checked to verify it contains contract code
-        //  2. The call itself is made, and success asserted
-        //  3. The return value is decoded, which in turn checks the size of the returned data.
+        // 1. The target address is checked to verify it contains contract code
+        // 2. The call itself is made, and success asserted
+        // 3. The return value is decoded, which in turn checks the size of the returned data.
         // solhint-disable-next-line max-line-length
 
         // solhint-disable-next-line avoid-low-level-calls
@@ -439,7 +439,7 @@ contract BNum is BConst {
         uint256 c0 = a * BONE;
         require(a == 0 || c0 / a == BONE, "ERR_DIV_INTERNAL"); // bmul overflow
         uint256 c1 = c0 + (b / 2);
-        require(c1 >= c0, "ERR_DIV_INTERNAL"); //  badd require
+        require(c1 >= c0, "ERR_DIV_INTERNAL"); // badd require
         uint256 c2 = c1 / b;
         return c2;
     }
@@ -491,7 +491,7 @@ contract BNum is BConst {
         bool negative = false;
 
         // term(k) = numer / denom
-        //         = (product(a - i - 1, i=1-->k) * x^k) / (k!)
+        // = (product(a - i - 1, i=1-->k) * x^k) / (k!)
         // each iteration, multiply previous term by (a-(k-1)) * x / k
         // continue until term is less than precision
         for (uint256 i = 1; term >= precision; i++) {
@@ -652,28 +652,79 @@ contract BToken is BTokenBase, IERC20 {
     }
 }
 
-contract PFOLIO is BToken {
+contract LPToken is BToken {
+    // ==
+    // 'Underlying' token-manipulation functions make external calls but are NOT locked
+    // You must `_lock_` or otherwise ensure reentry-safety
+
+    function _pullUnderlying(
+        address erc20,
+        address from,
+        uint256 amount
+    ) internal {
+        bool xfer = IERC20(erc20).transferFrom(from, address(this), amount);
+        require(xfer, "ERR_ERC20_FALSE");
+    }
+
+    function _pushUnderlying(
+        address erc20,
+        address to,
+        uint256 amount
+    ) internal {
+        bool xfer = IERC20(erc20).transfer(to, amount);
+        require(xfer, "ERR_ERC20_FALSE");
+    }
+
+    function _pullPoolShare(address from, uint256 amount) internal {
+        _pull(from, amount);
+    }
+
+    function _pushPoolShare(address to, uint256 amount) internal {
+        _push(to, amount);
+    }
+
+    function _mintPoolShare(uint256 amount) internal {
+        _mint(amount);
+    }
+
+    function _burnPoolShare(uint256 amount) internal {
+        _burn(amount);
+    }
+}
+
+contract Storage {
     using SafeMath for uint256;
 
-    event LOG_SWAP(
-        address indexed caller,
-        address indexed tokenIn,
-        address indexed tokenOut,
-        uint256 tokenAmountIn,
-        uint256 tokenAmountOut
-    );
+    struct Record {
+        bool bound; // is token bound to pool
+        uint256 index; // private
+        uint256 balance;
+        Types.RStatus RStatus;
+        uint256 target;
+        uint256 balanceLimit;
+        address token;
+        uint256 price;
+        uint256 min;
+        uint256 max;
+    }
 
-    event LOG_JOIN(
-        address indexed caller,
-        address indexed tokenIn,
-        uint256 tokenAmountIn
-    );
+    address public _factory; // BFactory address to push token exitFee to
+    address public _controller; // has CONTROL role
+    bool public _publicSwap; // true if PUBLIC can call SWAP functions
 
-    event LOG_EXIT(
-        address indexed caller,
-        address indexed tokenOut,
-        uint256 tokenAmountOut
-    );
+    // `setSwapFee` and `finalize` require CONTROL
+    // `finalize` sets `PUBLIC can SWAP`, `PUBLIC can JOIN`
+    uint256 public _swapFee;
+    bool public _finalized;
+
+    address[] public _tokens;
+
+    bool public DEBUG_PRICE = true;
+    bool public DEBUG_TRADE = true;
+
+    mapping(address => Record) public _records;
+
+    uint256 public _portfolioValue;
 
     event LOG_CALL(
         bytes4 indexed sig,
@@ -699,35 +750,6 @@ contract PFOLIO is BToken {
     }
 
     bool private _mutex;
-
-    address private _factory; // BFactory address to push token exitFee to
-    address private _controller; // has CONTROL role
-    bool private _publicSwap; // true if PUBLIC can call SWAP functions
-
-    // `setSwapFee` and `finalize` require CONTROL
-    // `finalize` sets `PUBLIC can SWAP`, `PUBLIC can JOIN`
-    uint256 private _swapFee;
-    bool private _finalized;
-
-    address[] private _tokens;
-
-    bool private DEBUG_PRICE = false;
-    bool private DEBUG_TRADE = false;
-
-    mapping(address => Record) private _records;
-
-    constructor() public {
-        _controller = msg.sender;
-        _factory = msg.sender;
-        _swapFee = MIN_FEE;
-        _publicSwap = false;
-        _finalized = false;
-        _LP_FEE_RATE_ = MIN_FEE;
-        _MT_FEE_RATE_ = MIN_FEE;
-        _K_ = 10**17;
-        _SUPERVISOR_ = msg.sender; // could freeze system in emergency
-        _MAINTAINER_ = msg.sender; // collect maintainer fee to buy food for DODO
-    }
 
     function isPublicSwap() external view returns (bool) {
         return _publicSwap;
@@ -781,7 +803,7 @@ contract PFOLIO is BToken {
         returns (uint256)
     {
         require(_records[token].bound, "ERR_NOT_BOUND");
-        return _records[token].targetTokenAmount;
+        return _records[token].target;
     }
 
     function getR(address token)
@@ -812,6 +834,26 @@ contract PFOLIO is BToken {
         }
     }
 
+    function getMin(address token)
+        external
+        view
+        _viewlock_
+        returns (uint256 min)
+    {
+        require(_records[token].bound, "ERR_NOT_BOUND");
+        return _records[token].min;
+    }
+
+    function getMax(address token)
+        external
+        view
+        _viewlock_
+        returns (uint256 max)
+    {
+        require(_records[token].bound, "ERR_NOT_BOUND");
+        return _records[token].max;
+    }
+
     function getSwapFee() external view _viewlock_ returns (uint256) {
         return _swapFee;
     }
@@ -819,6 +861,149 @@ contract PFOLIO is BToken {
     function getController() external view _viewlock_ returns (address) {
         return _controller;
     }
+
+    //TODO: will take prices from oracles
+    function setOraclePrice(address token, uint256 price) external {
+        // TODO: fails ungracefully on unbound tokens
+        // TODO: mock function, will take pricefeeds from oracles
+        _records[token].price = price;
+    }
+
+    // price in usd in decimal 10**18
+    // assumes token price is up-to-date
+    function getAssetPrice(address token) public view returns (uint256) {
+        // TODO: fails ungracefully on unbound tokens
+        // TODO: mock function, will take pricefeeds from oracles
+        // TODO: assumes all pricefeeds have the same precision, will have to convert in prod
+        return _records[token].price;
+    }
+
+    // price base relative to quote in decimal 10**18
+    // assumes asset prices are up-to-date
+    function getTransactionPrice(address base, address quote)
+        public
+        view
+        returns (uint256)
+    {
+        // TODO: fails ungracefully on unbound tokens
+        // TODO: mock function, will take pricefeeds from oracles
+        // TODO: choose the sort of division - floor, ceiling
+        return
+            DecimalMath.divFloor(_records[base].price, _records[quote].price);
+    }
+
+    // assumes asset prices are up-to-date
+    function updatePortfolioValue() public {
+        uint256 i;
+        address token;
+        uint256 value;
+        _portfolioValue = 0;
+
+        // console.log("_tokens length is %s", _tokens.length); // ORACLE_DEBUG
+
+        for (i = 0; i < _tokens.length; i++) {
+            token = _tokens[i];
+            value = _records[token].balance.mul(_records[token].price); // balance * price
+
+            // console.log("token %s value is %s", i+1, value); // ORACLE_DEBUG
+
+            _portfolioValue = _portfolioValue.add(value);
+        }
+    }
+
+    // assumes asset prices and _portfolioValue are up-to-date
+    function getCurrentShare(address asset) public view returns (uint256) {
+        uint256 assetValue = _records[asset].balance.mul(_records[asset].price);
+
+        // console.log("token value is %s", value); // ORACLE_DEBUG
+
+        return DecimalMath.divFloor(assetValue, _portfolioValue);
+    }
+
+    // assumes asset prices and _portfolioValue are up-to-date
+    function checkSharesAfterTx(
+        address base,
+        address quote,
+        uint256 baseBalanceAfterTx,
+        uint256 quoteBalanceAfterTx
+    ) public view {
+        // take price of token1 in usd
+        // take price of all tokens in usd - in state?
+        /// add all shares of tokens from balances
+        // decimal divide
+
+        uint256 baseValueBeforeTx =
+            _records[base].balance.mul(_records[base].price);
+        uint256 quoteValueBeforeTx =
+            _records[quote].balance.mul(_records[quote].price);
+
+        uint256 baseValueAfterTx = baseBalanceAfterTx.mul(_records[base].price);
+        uint256 quoteValueAfterTx =
+            quoteBalanceAfterTx.mul(_records[quote].price);
+
+        // console.log("token value is %s", value); // ORACLE_DEBUG
+        uint256 wholeValueAfterTx;
+        wholeValueAfterTx = _portfolioValue.add(baseValueAfterTx).add(
+            quoteValueAfterTx
+        );
+        wholeValueAfterTx = wholeValueAfterTx.sub(baseValueBeforeTx).sub(
+            quoteValueBeforeTx
+        );
+
+        // console.log("whole value is %s", wholeValueAfterTx); // ORACLE_DEBUG
+
+        uint256 baseShare =
+            DecimalMath.divFloor(baseValueAfterTx, wholeValueAfterTx);
+        uint256 quoteShare =
+            DecimalMath.divFloor(quoteValueAfterTx, wholeValueAfterTx);
+
+        // share of base and quote after tx should be within share limits
+        require(
+            _records[base].min <= baseShare && baseShare <= _records[base].max,
+            "BASE OUTSIDE LIMITS"
+        );
+        require(
+            _records[quote].min <= quoteShare &&
+                quoteShare <= _records[quote].max,
+            "QUOTE OUTSIDE LIMITS"
+        );
+    }
+
+    function setK(uint256 k) external returns (uint256) {
+        _K_ = k;
+        return k;
+    }
+
+    // ReentrancyGuard
+
+    // https://solidity.readthedocs.io/en/latest/control-structures.html?highlight=zero-state#scoping-and-declarations
+    // zero-state of _ENTERED_ is false
+    bool private _ENTERED_;
+
+    modifier preventReentrant() {
+        require(!_ENTERED_, "REENTRANT");
+        _ENTERED_ = true;
+        _;
+        _ENTERED_ = false;
+    }
+
+    // ============ Core Address ============
+
+    address public _SUPERVISOR_; // could freeze system in emergency
+    address public _MAINTAINER_; // collect maintainer fee to buy food for DODO
+
+    // ============ Variables for PMM Algorithm ============
+
+    uint256 public _K_;
+
+    // ============ Version Control ============
+    function version() external pure returns (uint256) {
+        return 101; // 0.0.1
+    }
+}
+
+contract Admin is Storage, LPToken {
+    using SafeMath for uint256;
 
     function setSwapFee(uint256 swapFee) external _logs_ _lock_ {
         require(!_finalized, "ERR_IS_FINALIZED");
@@ -851,7 +1036,12 @@ contract PFOLIO is BToken {
         _pushPoolShare(msg.sender, INIT_POOL_SUPPLY);
     }
 
-    function bind(address token, uint256 balance)
+    function bind(
+        address token,
+        uint256 balance,
+        uint256 min,
+        uint256 max
+    )
         external
         _logs_
     // _lock_  Bind does not lock because it jumps to `rebind`, which does
@@ -867,43 +1057,16 @@ contract PFOLIO is BToken {
             index: _tokens.length,
             balance: 0, // and set by `rebind`
             RStatus: Types.RStatus.ONE,
-            targetTokenAmount: 0,
+            target: 0,
             balanceLimit: MAX_INT,
-            token: token
+            token: token,
+            price: 0, // set by `rebind`
+            min: 0, // set by `rebind`
+            max: 0 // set by `rebind`
         });
         _tokens.push(token);
         rebind(token, balance);
-    }
-
-    function setOraclePrice(
-        address base,
-        address quote,
-        uint256 price
-    ) external returns (uint256) {
-        _oracles[base][quote] = price;
-        return _oracles[base][quote];
-    }
-
-    function setK(uint256 k) external returns (uint256) {
-        _K_ = k;
-        return k;
-    }
-
-    function getQuadratic(
-        uint256 targetQuoteTokenAmount,
-        uint256 i,
-        uint256 amount,
-        uint256 k
-    ) external pure returns (uint256) {
-        uint256 Q2 =
-            DODOMath._SolveQuadraticFunctionForTrade(
-                targetQuoteTokenAmount,
-                targetQuoteTokenAmount,
-                DecimalMath.mul(i, amount),
-                false,
-                k
-            );
-        return Q2;
+        adjustShareLimits(token, min, max);
     }
 
     function rebind(address token, uint256 balance) public _logs_ _lock_ {
@@ -916,7 +1079,7 @@ contract PFOLIO is BToken {
         // Adjust the balance record and actual token balance
         uint256 oldBalance = _records[token].balance;
         _records[token].balance = balance;
-        _records[token].targetTokenAmount = balance;
+        _records[token].target = balance;
         if (balance > oldBalance) {
             _pullUnderlying(token, msg.sender, bsub(balance, oldBalance));
         } else if (balance < oldBalance) {
@@ -930,6 +1093,21 @@ contract PFOLIO is BToken {
             );
             _pushUnderlying(token, _factory, tokenExitFee);
         }
+    }
+
+    function adjustShareLimits(
+        address token,
+        uint256 min,
+        uint256 max
+    ) public {
+        require(msg.sender == _controller, "ERR_NOT_CONTROLLER");
+        require(_records[token].bound, "ERR_NOT_BOUND");
+
+        // Adjust the min and max share limits
+        _records[token].min = min;
+        _records[token].max = max;
+
+        // TODO: check if old balance is outside new limits
     }
 
     function unbind(address token) external _logs_ _lock_ {
@@ -952,14 +1130,870 @@ contract PFOLIO is BToken {
             index: 0,
             balance: 0,
             RStatus: Types.RStatus.ONE,
-            targetTokenAmount: 0,
+            target: 0,
             balanceLimit: MAX_INT,
-            token: token
+            token: token,
+            price: 0,
+            min: 0,
+            max: 0
         });
 
         _pushUnderlying(token, msg.sender, bsub(tokenBalance, tokenExitFee));
         _pushUnderlying(token, _factory, tokenExitFee);
     }
+
+    // InitializableOwnable
+
+    address public _OWNER_;
+    address public _NEW_OWNER_;
+
+    // ============ Events ============
+
+    event OwnershipTransferPrepared(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+
+    // ============ Modifiers ============
+
+    modifier onlyOwner() {
+        require(msg.sender == _OWNER_, "NOT_OWNER");
+        _;
+    }
+
+    // ============ Functions ============
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "INVALID_OWNER");
+        emit OwnershipTransferPrepared(_OWNER_, newOwner);
+        _NEW_OWNER_ = newOwner;
+    }
+
+    function claimOwnership() external {
+        require(msg.sender == _NEW_OWNER_, "INVALID_CLAIM");
+        emit OwnershipTransferred(_OWNER_, _NEW_OWNER_);
+        _OWNER_ = _NEW_OWNER_;
+        _NEW_OWNER_ = address(0);
+    }
+}
+
+contract TestMath {
+    using SafeMath for uint256;
+
+    // ============ Math functions ============
+
+    /*
+        Integrate dodo curve fron V1 to V2
+        require V0>=V1>=V2>0
+        res = (1-k)i(V1-V2)+ikV0*V0(1/V2-1/V1)
+        let V1-V2=delta
+        res = i*delta*(1-k+k(V0^2/V1/V2))
+    */
+    function GeneralIntegrate(
+        uint256 V0,
+        uint256 V1,
+        uint256 V2,
+        uint256 i,
+        uint256 k
+    ) public view returns (uint256) {
+        // console.log("GeneralIntegrate  (V0:%s, V1:%s, V2:%s, i, k)", V0, V1, V2); //PRICE_DEBUG
+        // console.log("GeneralIntegrate  (V0, V1, V2, i:%s, k:%s)", i, k); //PRICE_DEBUG
+        uint256 fairAmount = DecimalMath.mul(i, V1.sub(V2)); // i*delta
+        // console.log("GeneralIntegrate:  fairAmount is i:%s * (B2:%s - B1:%s)", i, V1, V2); //PRICE_DEBUG
+        // console.log("GeneralIntegrate:  fairAmount is %s * %s, is %s", i, V1.sub(V2), fairAmount); //PRICE_DEBUG
+        uint256 V0V0V1V2 = DecimalMath.divCeil(V0.mul(V0).div(V1), V2);
+        uint256 penalty = DecimalMath.mul(k, V0V0V1V2); // k(V0^2/V1/V2)
+        // console.log("GeneralIntegrate:  penalty is k   * (B0:%s^2/V1:%s/V2:%s)", V0, V1, V2); //PRICE_DEBUG
+        // console.log("GeneralIntegrate:  penalty is k   * (%s/%s/%s)", V0.mul(V0), V1, V2); //PRICE_DEBUG
+        // console.log("GeneralIntegrate:  penalty is k   * (%s/%s)", V0.mul(V0).div(V1), V2); //PRICE_DEBUG
+        // console.log("GeneralIntegrate:  penalty is k   * (%s)", V0V0V1V2); //PRICE_DEBUG
+        // console.log("GeneralIntegrate:  penalty is %s", penalty); //PRICE_DEBUG
+
+        // console.log("GeneralIntegrate:  deltaQ  is fairAmount:%s * (1-k:%s + penalty:%s)", fairAmount, DecimalMath.ONE.sub(k), penalty); //PRICE_DEBUG
+        // console.log("GeneralIntegrate:  deltaQ  is %s * %s", fairAmount, DecimalMath.ONE.sub(k).add(penalty)); //PRICE_DEBUG
+        // console.log("GeneralIntegrate:  deltaQ  is %s", DecimalMath.mul(fairAmount, DecimalMath.ONE.sub(k).add(penalty))); //PRICE_DEBUG
+        return DecimalMath.mul(fairAmount, DecimalMath.ONE.sub(k).add(penalty));
+    }
+
+    /*
+        The same with integration expression above, we have:
+        i*deltaB = (Q2-Q1)*(1-k+kQ0^2/Q1/Q2)
+        Given Q1 and deltaB, solve Q2
+        This is a quadratic function and the standard version is
+        aQ2^2 + bQ2 + c = 0, where
+        a=1-k
+        -b=(1-k)Q1-kQ0^2/Q1+i*deltaB
+        c=-kQ0^2
+        and Q2=(-b+sqrt(b^2+4(1-k)kQ0^2))/2(1-k)
+        note: another root is negative, abondan
+        if deltaBSig=true, then Q2>Q1
+        if deltaBSig=false, then Q2<Q1
+    */
+    function SolveQuadraticFunctionForTrade(
+        uint256 Q0,
+        uint256 Q1,
+        uint256 ideltaB,
+        bool deltaBSig,
+        uint256 k
+    ) public view returns (uint256) {
+        // console.log("SolveQuadraticFunctionForTrade (Q0:%s, Q1:%s, ideltaB:%s, deltaBSig, k)", Q0, Q1, ideltaB); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade (Q0, Q1, ideltaB, deltaBSig:%s, k:%s)", deltaBSig, k); //PRICE_DEBUG
+
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2+4ac))/2a"); //PRICE_DEBUG
+
+        // console.log("SolveQuadraticFunctionForTrade:  b is (kQ0^2/Q1)-Q1+(kQ1)-(i*deltaB)"); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: -b is (1-k)Q1-(kQ0^2/Q1)+(i*deltaB)"); //PRICE_DEBUG
+        // calculate -b value and sig
+        // -b = (1-k)Q1-kQ0^2/Q1+i*deltaB
+        uint256 kQ02Q1 = DecimalMath.mul(k, Q0).mul(Q0).div(Q1); // kQ0^2/Q1
+
+        // console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is k*%s*%s/%s", Q0, Q0, Q1); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is %s*%s/%s", DecimalMath.mul(k, Q0), Q0, Q1); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is %s/%s", DecimalMath.mul(k, Q0).mul(Q0), Q1); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is %s", kQ02Q1); //PRICE_DEBUG
+
+        uint256 b = DecimalMath.mul(DecimalMath.ONE.sub(k), Q1); // (1-k)Q1
+
+        // console.log("SolveQuadraticFunctionForTrade: (1-k)Q1 is 0.9*%s", Q1); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: (1-k)Q1 is %s", b); //PRICE_DEBUG
+
+        bool minusbSig = true;
+        if (deltaBSig) {
+            // console.log("SolveQuadraticFunctionForTrade: (1-k)Q1+(i*deltaB) is %s+%s", b, ideltaB); //PRICE_DEBUG
+            b = b.add(ideltaB); // (1-k)Q1+i*deltaB
+            // console.log("SolveQuadraticFunctionForTrade: (1-k)Q1+(i*deltaB) is %s", b); //PRICE_DEBUG
+        } else {
+            // console.log("SolveQuadraticFunctionForTrade: (kQ0^2/Q1)+(i*deltaB) is %s+%s", kQ02Q1, ideltaB); //PRICE_DEBUG
+            kQ02Q1 = kQ02Q1.add(ideltaB); // i*deltaB+kQ0^2/Q1
+            // console.log("SolveQuadraticFunctionForTrade: (kQ0^2/Q1)+(i*deltaB) is %s", kQ02Q1); //PRICE_DEBUG
+        }
+
+        // console.log("SolveQuadraticFunctionForTrade: -b is (1-k)Q1-(kQ0^2/Q1)+(i*deltaB)"); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: -b is %s-%s", b, kQ02Q1); //PRICE_DEBUG
+        if (b >= kQ02Q1) {
+            b = b.sub(kQ02Q1);
+            minusbSig = true;
+            // console.log("SolveQuadraticFunctionForTrade: -b is %s", b); //PRICE_DEBUG
+        } else {
+            b = kQ02Q1.sub(b);
+            minusbSig = false;
+            // console.log("SolveQuadraticFunctionForTrade: -b is -%s", b); //PRICE_DEBUG
+        }
+
+        // calculate sqrt
+        uint256 squareRoot =
+            DecimalMath.mul(
+                DecimalMath.ONE.sub(k).mul(4),
+                DecimalMath.mul(k, Q0).mul(Q0)
+            ); // 4(1-k)kQ0^2
+
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2+4ac))/2a"); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: 4a is 4(1-k), is %s", DecimalMath.ONE.sub(k).mul(4)); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: c is k*Q0^2, is 0.1*%s^2, is %s", Q0, DecimalMath.mul(k, Q0).mul(Q0)); //PRICE_DEBUG
+        // uint256 a4 = DecimalMath.ONE.sub(k).mul(4);  //PRICE_DEBUG
+        // uint256 c = DecimalMath.mul(k, Q0).mul(Q0);  //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: 4ac is 4a:%s * c:%s, is %s", a4, c, squareRoot); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2+4ac))/2a"); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2 + %s))/2a", squareRoot); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(%s^2 + %s))/2a", b, squareRoot); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(%s + %s))/2a", b.mul(b), squareRoot); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(%s))/2a", b.mul(b).add(squareRoot)); //PRICE_DEBUG
+        squareRoot = b.mul(b).add(squareRoot).sqrt(); // sqrt(b*b+4(1-k)kQ0*Q0)
+
+        // console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + %s)/2a", squareRoot); //PRICE_DEBUG
+
+        // final res
+        uint256 denominator = DecimalMath.ONE.sub(k).mul(2); // 2(1-k)
+
+        // console.log("SolveQuadraticFunctionForTrade: 2a is 2(1-k)"); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: 2a is 2(%s - %s)",DecimalMath.ONE, k); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: 2a is 2(%s)", DecimalMath.ONE.sub(k)); //PRICE_DEBUG
+        // console.log("SolveQuadraticFunctionForTrade: 2a is %s", denominator); //PRICE_DEBUG
+
+        uint256 numerator;
+        if (minusbSig) {
+            numerator = b.add(squareRoot);
+
+            // console.log("SolveQuadraticFunctionForTrade: Q2 is (%s + %s)/%s", squareRoot, b, denominator); //PRICE_DEBUG
+            // console.log("SolveQuadraticFunctionForTrade: Q2 is %s/%s", numerator, denominator); //PRICE_DEBUG
+        } else {
+            numerator = squareRoot.sub(b);
+
+            // console.log("SolveQuadraticFunctionForTrade: Q2 is (%s - %s)/%s", squareRoot, b, denominator); //PRICE_DEBUG
+            // console.log("SolveQuadraticFunctionForTrade: Q2 is %s/%s", numerator, denominator); //PRICE_DEBUG
+        }
+
+        if (deltaBSig) {
+            // console.log("SolveQuadraticFunctionForTrade: Q2 is %s", DecimalMath.divFloor(numerator, denominator)); //PRICE_DEBUG
+            return DecimalMath.divFloor(numerator, denominator);
+        } else {
+            // console.log("SolveQuadraticFunctionForTrade: Q2 is %s", DecimalMath.divCeil(numerator, denominator)); //PRICE_DEBUG
+            return DecimalMath.divCeil(numerator, denominator);
+        }
+    }
+
+    /*
+        Start from the integration function
+        i*deltaB = (Q2-Q1)*(1-k+kQ0^2/Q1/Q2)
+        Assume Q2=Q0, Given Q1 and deltaB, solve Q0
+        let fairAmount = i*deltaB
+    */
+    function SolveQuadraticFunctionForTarget(
+        uint256 V1,
+        uint256 k,
+        uint256 fairAmount
+    ) public pure returns (uint256 V0) {
+        // V0 = V1+V1*(sqrt-1)/2k
+        uint256 sqrt =
+            DecimalMath.divCeil(DecimalMath.mul(k, fairAmount).mul(4), V1);
+        sqrt = sqrt.add(DecimalMath.ONE).mul(DecimalMath.ONE).sqrt();
+        uint256 premium =
+            DecimalMath.divCeil(sqrt.sub(DecimalMath.ONE), k.mul(2));
+        // V0 is greater than or equal to V1 according to the solution
+        return DecimalMath.mul(V1, DecimalMath.ONE.add(premium));
+    }
+}
+
+contract Pricing is Storage {
+    using SafeMath for uint256;
+
+    // ============ Query Functions ============
+
+    function querySellBaseToken(
+        address base,
+        address quote,
+        uint256 amount
+    ) public view returns (uint256 receiveQuote) {
+        // TODO: update prices from oracles
+
+        (receiveQuote, , , ) = _querySellBaseToken(base, quote, amount);
+
+        return receiveQuote;
+    }
+
+    function queryBuyBaseToken(
+        address base,
+        address quote,
+        uint256 amount
+    ) public view returns (uint256 payQuote) {
+        // TODO: update prices from oracles
+
+        (payQuote, , , ) = _queryBuyBaseToken(base, quote, amount);
+
+        return payQuote;
+    }
+
+    // assumes prices are up-to-date
+    function _querySellBaseToken(
+        address base,
+        address quote,
+        uint256 amount
+    )
+        public
+        view
+        returns (
+            uint256 receiveQuote,
+            Types.RStatus newRStatus,
+            uint256 newQuoteTarget,
+            uint256 newBaseTarget
+        )
+    {
+        // console.log("querySellBaseToken (base, quote, amount)"); //PRICE_DEBUG
+        // console.log("querySellBaseToken (%s, %s, %s)", base, quote, amount); //PRICE_DEBUG
+
+        (newBaseTarget, newQuoteTarget) = getExpectedTarget(base, quote);
+
+        uint256 sellBaseAmount = amount;
+
+        // console.log("_queryBuyBaseToken: R is %s", mapR(baseToken.RStatus));  //PRICE_DEBUG
+
+        if (_records[base].RStatus == Types.RStatus.ONE) {
+            // case 1: R=1
+            // R falls below one
+            receiveQuote = _ROneSellBaseToken(
+                base,
+                quote,
+                sellBaseAmount,
+                newQuoteTarget
+            );
+            newRStatus = Types.RStatus.BELOW_ONE;
+        } else if (_records[base].RStatus == Types.RStatus.ABOVE_ONE) {
+            uint256 backToOnePayBase =
+                newBaseTarget.sub(_records[base].balance);
+            uint256 backToOneReceiveQuote =
+                _records[quote].balance.sub(newQuoteTarget);
+            // case 2: R>1
+            // complex case, R status depends on trading amount
+            if (sellBaseAmount < backToOnePayBase) {
+                // case 2.1: R status do not change
+                receiveQuote = _RAboveSellBaseToken(
+                    base,
+                    quote,
+                    _records[base].balance,
+                    _records[base].balance,
+                    newBaseTarget
+                );
+                newRStatus = Types.RStatus.ABOVE_ONE;
+                if (receiveQuote > backToOneReceiveQuote) {
+                    // [Important corner case!] may enter this branch when some precision problem happens. And consequently contribute to negative spare quote amount
+                    // to make sure spare quote>=0, mannually set receiveQuote=backToOneReceiveQuote
+                    receiveQuote = backToOneReceiveQuote;
+                }
+            } else if (sellBaseAmount == backToOnePayBase) {
+                // case 2.2: R status changes to ONE
+                receiveQuote = backToOneReceiveQuote;
+                newRStatus = Types.RStatus.ONE;
+            } else {
+                // case 2.3: R status changes to BELOW_ONE
+                receiveQuote = backToOneReceiveQuote.add(
+                    _ROneSellBaseToken(
+                        base,
+                        quote,
+                        sellBaseAmount.sub(backToOnePayBase),
+                        newQuoteTarget
+                    )
+                );
+                newRStatus = Types.RStatus.BELOW_ONE;
+            }
+        } else {
+            // _R_STATUS_ == Types.RStatus.BELOW_ONE
+            // case 3: R<1
+            receiveQuote = _RBelowSellBaseToken(
+                base,
+                quote,
+                sellBaseAmount,
+                _records[quote].balance,
+                newQuoteTarget
+            );
+            newRStatus = Types.RStatus.BELOW_ONE;
+        }
+
+        // console.log("querySellBaseToken: receiveQuote is %s", receiveQuote); //PRICE_DEBUG
+        // console.log("querySellBaseToken: new R is %s", mapR(newRStatus)); //PRICE_DEBUG
+
+        // return (receiveQuote, lpFeeQuote, mtFeeQuote, newRStatus, newQuoteTarget, newBaseTarget);
+        return (receiveQuote, newRStatus, newQuoteTarget, newBaseTarget);
+    }
+
+    function _queryBuyBaseToken(
+        address base,
+        address quote,
+        uint256 amount
+    )
+        public
+        view
+        returns (
+            uint256 payQuote,
+            Types.RStatus newRStatus,
+            uint256 newQuoteTarget,
+            uint256 newBaseTarget
+        )
+    {
+        // console.log("_queryBuyBaseToken (base, quote, amount)"); //PRICE_DEBUG
+        // console.log("_queryBuyBaseToken (%s, %s, %s)", base, quote, amount); //PRICE_DEBUG
+
+        (newBaseTarget, newQuoteTarget) = getExpectedTarget(base, quote);
+
+        // console.log("newBaseTarget is %s, newQuoteTarget is %s", newBaseTarget, newQuoteTarget); //PRICE_DEBUG
+
+        // charge fee from user receive amount
+        // lpFeeBase = DecimalMath.mul(amount, 0.3);
+        // mtFeeBase = DecimalMath.mul(amount, _MT_FEE_RATE_);
+        // uint256 buyBaseAmount = amount.add(lpFeeBase).add(mtFeeBase);
+        uint256 buyBaseAmount = amount;
+
+        // console.log("_queryBuyBaseToken: R is %s", getR(base)); //PRICE_DEBUG
+
+        if (_records[base].RStatus == Types.RStatus.ONE) {
+            // case 1: R=1
+            payQuote = _ROneBuyBaseToken(
+                base,
+                quote,
+                buyBaseAmount,
+                newBaseTarget
+            );
+
+            newRStatus = Types.RStatus.ABOVE_ONE;
+        } else if (_records[base].RStatus == Types.RStatus.ABOVE_ONE) {
+            // case 2: R>1
+            payQuote = _RAboveBuyBaseToken(
+                base,
+                quote,
+                buyBaseAmount,
+                _records[base].balance,
+                newBaseTarget
+            );
+            newRStatus = Types.RStatus.ABOVE_ONE;
+        } else if (_records[base].RStatus == Types.RStatus.BELOW_ONE) {
+            uint256 backToOnePayQuote =
+                newQuoteTarget.sub(_records[quote].balance);
+            uint256 backToOneReceiveBase =
+                _records[base].balance.sub(newBaseTarget);
+            // case 3: R<1
+            // complex case, R status may change
+            if (buyBaseAmount < backToOneReceiveBase) {
+                // case 3.1: R status do not change
+                // no need to check payQuote because spare base token must be greater than zero
+                payQuote = _RBelowBuyBaseToken(
+                    base,
+                    quote,
+                    buyBaseAmount,
+                    _records[quote].balance,
+                    newQuoteTarget
+                );
+                newRStatus = Types.RStatus.BELOW_ONE;
+            } else if (buyBaseAmount == backToOneReceiveBase) {
+                // case 3.2: R status changes to ONE
+                payQuote = backToOnePayQuote;
+                newRStatus = Types.RStatus.ONE;
+            } else {
+                // case 3.3: R status changes to ABOVE_ONE
+                payQuote = backToOnePayQuote.add(
+                    _ROneBuyBaseToken(
+                        base,
+                        quote,
+                        buyBaseAmount.sub(backToOneReceiveBase),
+                        newBaseTarget
+                    )
+                );
+                newRStatus = Types.RStatus.ABOVE_ONE;
+            }
+        }
+
+        // console.log("_queryBuyBaseToken: payQuote is %s", payQuote); //PRICE_DEBUG
+        // console.log("_queryBuyBaseToken: new R is %s", mapR(newRStatus)); //PRICE_DEBUG
+
+        // return (payQuote, lpFeeBase, mtFeeBase, newRStatus, newQuoteTarget, newBaseTarget);
+        return (payQuote, newRStatus, newQuoteTarget, newBaseTarget);
+    }
+
+    // ============ Pricing functions ============
+
+    // ============ R = 1 cases ============
+
+    function _ROneSellBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 targetQuoteTokenAmount
+    ) public view returns (uint256 receiveQuoteToken) {
+        // console.log("ROneSellBaseToken (base, quote, amount, targetQuoteTokenAmount)"); //PRICE_DEBUG
+        // console.log("ROneSellBaseToken (base, quote, %s, %s)", amount, targetQuoteTokenAmount); //PRICE_DEBUG
+
+        uint256 i = getTransactionPrice(base, quote);
+        // console.log("ROneSellBaseToken: Price is %s", i); //PRICE_DEBUG
+
+        // console.log("SolveQuadraticFunctionForTrade (targetQuote, targetQuote, i*amount, false, k)"); //PRICE_DEBUG
+        uint256 Q2 =
+            DODOMath._SolveQuadraticFunctionForTrade(
+                targetQuoteTokenAmount,
+                targetQuoteTokenAmount,
+                DecimalMath.mul(i, amount),
+                false,
+                _K_
+            );
+
+        // console.log("ROneSellBaseToken: receiveQuote is targetQuote - Q2"); //PRICE_DEBUG
+        // console.log("ROneSellBaseToken: receiveQuote is %s - %s", targetQuoteTokenAmount, Q2); //PRICE_DEBUG
+        // console.log("ROneSellBaseToken: receiveQuote is %s", targetQuoteTokenAmount.sub(Q2)); //PRICE_DEBUG
+        // in theory Q2 <= targetQuoteTokenAmount
+        // however when amount is close to 0, precision problems may cause Q2 > targetQuoteTokenAmount
+        return targetQuoteTokenAmount.sub(Q2);
+    }
+
+    function _ROneBuyBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 targetBaseTokenAmount
+    ) public view returns (uint256 payQuoteToken) {
+        // console.log("ROneBuyBaseToken  (base, quote, amount, targetBaseTokenAmount)"); //PRICE_DEBUG
+        // console.log("ROneBuyBaseToken  (base, quote, %s, %s)", amount, targetBaseTokenAmount); //PRICE_DEBUG
+        require(amount < targetBaseTokenAmount, "DODO_BASE_BALANCE_NOT_ENOUGH");
+        uint256 B2 = targetBaseTokenAmount.sub(amount);
+
+        // console.log("ROneBuyBaseToken:  New base balance is targetBaseTokenAmount - amount"); //PRICE_DEBUG
+        // console.log("ROneBuyBaseToken:  New base balance is %s - %s", targetBaseTokenAmount, amount); //PRICE_DEBUG
+        // console.log("ROneBuyBaseToken:  New base balance is %s", B2); //PRICE_DEBUG
+
+        payQuoteToken = _RAboveIntegrate(
+            base,
+            quote,
+            targetBaseTokenAmount,
+            targetBaseTokenAmount,
+            B2
+        );
+        return payQuoteToken;
+    }
+
+    // ============ R < 1 cases ============
+
+    function _RBelowSellBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 quoteBalance,
+        uint256 targetQuoteAmount
+    ) public view returns (uint256 receieQuoteToken) {
+        uint256 i = getTransactionPrice(base, quote);
+        uint256 Q2 =
+            DODOMath._SolveQuadraticFunctionForTrade(
+                targetQuoteAmount,
+                quoteBalance,
+                DecimalMath.mul(i, amount),
+                false,
+                _K_
+            );
+        return quoteBalance.sub(Q2);
+    }
+
+    function _RBelowBuyBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 quoteBalance,
+        uint256 targetQuoteAmount
+    ) public view returns (uint256 payQuoteToken) {
+        // Here we don't require amount less than some value
+        // Because it is limited at upper function
+        // See Trader._queryBuyBaseToken
+        uint256 i = getTransactionPrice(base, quote);
+        uint256 Q2 =
+            DODOMath._SolveQuadraticFunctionForTrade(
+                targetQuoteAmount,
+                quoteBalance,
+                DecimalMath.mulCeil(i, amount),
+                true,
+                _K_
+            );
+        return Q2.sub(quoteBalance);
+    }
+
+    function _RBelowBackToOne(address base, address quote)
+        public
+        view
+        returns (uint256 payQuoteToken)
+    {
+        // important: carefully design the system to make sure spareBase always greater than or equal to 0
+        uint256 spareBase = _records[base].balance.sub(_records[base].target);
+        uint256 price = getTransactionPrice(base, quote);
+        uint256 fairAmount = DecimalMath.mul(spareBase, price);
+        uint256 newTargetQuote =
+            DODOMath._SolveQuadraticFunctionForTarget(
+                _records[base].balance,
+                _K_,
+                fairAmount
+            );
+        return newTargetQuote.sub(_records[quote].balance);
+    }
+
+    // ============ R > 1 cases ============
+
+    function _RAboveBuyBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 baseBalance,
+        uint256 targetBaseAmount
+    ) public view returns (uint256 payQuoteToken) {
+        require(amount < baseBalance, "DODO_BASE_BALANCE_NOT_ENOUGH");
+        uint256 B2 = baseBalance.sub(amount);
+        return _RAboveIntegrate(base, quote, targetBaseAmount, baseBalance, B2);
+    }
+
+    function _RAboveSellBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 baseBalance,
+        uint256 targetBaseAmount
+    ) public view returns (uint256 receiveQuoteToken) {
+        // here we don't require B1 <= targetBaseAmount
+        // Because it is limited at upper function
+        // See Trader.querySellBaseToken
+        uint256 B1 = baseBalance.add(amount);
+        return _RAboveIntegrate(base, quote, targetBaseAmount, B1, baseBalance);
+    }
+
+    function _RAboveBackToOne(address base, address quote)
+        public
+        view
+        returns (uint256 payBaseToken)
+    {
+        // important: carefully design the system to make sure spareBase always greater than or equal to 0
+        uint256 spareQuote =
+            _records[quote].balance.sub(_records[quote].target);
+        uint256 price = getTransactionPrice(base, quote);
+        uint256 fairAmount = DecimalMath.divFloor(spareQuote, price);
+        uint256 newTargetBase =
+            DODOMath._SolveQuadraticFunctionForTarget(
+                _records[base].balance,
+                _K_,
+                fairAmount
+            );
+        return newTargetBase.sub(_records[base].balance);
+    }
+
+    // ============ Helper functions ============
+
+    function getExpectedTarget(address base, address quote)
+        public
+        view
+        returns (uint256 baseTarget, uint256 quoteTarget)
+    {
+        // console.log("getExpectedTarget (base, quote)"); //PRICE_DEBUG
+
+        uint256 Q = _records[quote].balance;
+        uint256 B = _records[base].balance;
+
+        // console.log("getExpectedTarget: Base balance is %s, quote balance is %s", Q, B); //PRICE_DEBUG
+
+        if (_records[base].RStatus == Types.RStatus.ONE) {
+            // console.log("getExpectedTarget: Base target is  %s, quote target is  %s", baseToken.target, quoteToken.target); //PRICE_DEBUG
+
+            return (_records[base].target, _records[base].target);
+        } else if (_records[base].RStatus == Types.RStatus.BELOW_ONE) {
+            uint256 payQuoteToken = _RBelowBackToOne(base, quote);
+            return (_records[base].target, Q.add(payQuoteToken));
+        } else if (_records[base].RStatus == Types.RStatus.ABOVE_ONE) {
+            uint256 payBaseToken = _RAboveBackToOne(base, quote);
+            return (B.add(payBaseToken), _records[base].target);
+        }
+    }
+
+    function _RAboveIntegrate(
+        address base,
+        address quote,
+        uint256 B0,
+        uint256 B1,
+        uint256 B2
+    ) public view returns (uint256) {
+        // console.log("RAboveIntegrate   (base, quote, B0, B1, B2)"); //PRICE_DEBUG
+        // console.log("RAboveIntegrate   (base, quote, %s, %s, %s)", B0, B1, B2); //PRICE_DEBUG
+        uint256 i = getTransactionPrice(base, quote);
+        // console.log("RAboveIntegrate:   Price is %s", i); //PRICE_DEBUG
+        return DODOMath._GeneralIntegrate(B0, B1, B2, i, _K_);
+    }
+}
+
+contract Trading is Pricing {
+    using SafeMath for uint256;
+
+    // ============ Events ============
+
+    event SellBaseToken(
+        address indexed seller,
+        uint256 payBase,
+        uint256 receiveQuote
+    );
+
+    event BuyBaseToken(
+        address indexed buyer,
+        uint256 receiveBase,
+        uint256 payQuote
+    );
+
+    event ChargeMaintainerFee(
+        address indexed maintainer,
+        bool isBaseToken,
+        uint256 amount
+    );
+
+    // ============ Trade Functions ============
+
+    function sellBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 minReceiveQuote
+    ) external preventReentrant returns (uint256) {
+        // console.log("sellBaseToken (base, quote, amount, minReceiveQuote)"); //TRADE_DEBUG
+        // console.log("sellBaseToken (base, quote, %s, %s)", amount, minReceiveQuote); //TRADE_DEBUG
+
+        // TODO: update prices from oracles. Currently assumes prices are up-to-date.
+
+        // query price
+        (
+            uint256 receiveQuote,
+            // uint256 lpFeeQuote,
+            // uint256 mtFeeQuote,
+            Types.RStatus newRStatus,
+            uint256 newQuoteTarget,
+            uint256 newBaseTarget
+        ) = _querySellBaseToken(base, quote, amount);
+        // console.log("sellBaseToken: receiveQuote is %s", receiveQuote); //TRADE_DEBUG
+
+        require(
+            receiveQuote >= minReceiveQuote,
+            "SELL_BASE_RECEIVE_NOT_ENOUGH"
+        );
+
+        // console.log("baseShare is %s, quoteShare is %s", getCurrentShare(base), getCurrentShare(quote)); // ORACLE_DEBUG
+
+        updatePortfolioValue();
+
+        checkSharesAfterTx(
+            base,
+            quote,
+            _records[base].balance + amount,
+            _records[quote].balance - receiveQuote
+        );
+
+        // console.log("baseShare will be %s, quoteShare will be %s", baseShare, quoteShare); // ORACLE_DEBUG
+
+        // settle assets
+        _quoteTokenTransferOut(quote, msg.sender, receiveQuote);
+
+        _baseTokenTransferIn(base, msg.sender, amount);
+
+        // update TARGET
+        if (_records[quote].target != newQuoteTarget) {
+            _records[quote].target = newQuoteTarget;
+        }
+        if (_records[base].target != newBaseTarget) {
+            _records[base].target = newBaseTarget;
+        }
+        if (_records[base].RStatus != newRStatus) {
+            _records[base].RStatus = newRStatus;
+        }
+
+        // _donateQuoteToken(lpFeeQuote);
+        emit SellBaseToken(msg.sender, amount, receiveQuote);
+
+        return receiveQuote;
+    }
+
+    function buyBaseToken(
+        address base,
+        address quote,
+        uint256 amount,
+        uint256 maxPayQuote
+    ) external preventReentrant returns (uint256) {
+        // TODO: update prices from oracles. Currently assumes prices are up-to-date.
+
+        // query price
+        (
+            uint256 payQuote,
+            Types.RStatus newRStatus,
+            uint256 newQuoteTarget,
+            uint256 newBaseTarget
+        ) = _queryBuyBaseToken(base, quote, amount);
+        require(payQuote <= maxPayQuote, "BUY_BASE_COST_TOO_MUCH");
+
+        updatePortfolioValue();
+
+        checkSharesAfterTx(
+            base,
+            quote,
+            _records[base].balance - amount,
+            _records[quote].balance + payQuote
+        );
+
+        // settle assets
+        _baseTokenTransferOut(base, msg.sender, amount);
+
+        _quoteTokenTransferIn(quote, msg.sender, payQuote);
+
+        // update TARGET
+        if (_records[quote].target != newQuoteTarget) {
+            _records[quote].target = newQuoteTarget;
+        }
+        if (_records[base].target != newBaseTarget) {
+            _records[base].target = newBaseTarget;
+        }
+        if (_records[base].RStatus != newRStatus) {
+            _records[base].RStatus = newRStatus;
+        }
+
+        // _donateBaseToken(lpFeeBase);
+        emit BuyBaseToken(msg.sender, amount, payQuote);
+
+        return payQuote;
+    }
+
+    // ============ Assets IN/OUT Functions ============
+
+    function _baseTokenTransferIn(
+        address base,
+        address from,
+        uint256 amount
+    ) public {
+        // console.log("_baseTokenTransferIn (base, from, amount)"); //TRADE_DEBUG
+
+        require(
+            _records[base].balance.add(amount) <= _records[base].balanceLimit,
+            "BASE_BALANCE_LIMIT_EXCEEDED"
+        );
+        IERC20(base).transferFrom(from, address(this), amount);
+        _records[base].balance = _records[base].balance.add(amount);
+        // console.log("_baseTokenTransferIn baseBalance is %s", baseToken.balance); //TRADE_DEBUG
+    }
+
+    function _quoteTokenTransferIn(
+        address quote,
+        address from,
+        uint256 amount
+    ) public {
+        // console.log("_quoteTokenTransferIn (quote, from, amount)"); //TRADE_DEBUG
+
+        require(
+            _records[quote].balance.add(amount) <= _records[quote].balanceLimit,
+            "QUOTE_BALANCE_LIMIT_EXCEEDED"
+        );
+        IERC20(quote).transferFrom(from, address(this), amount);
+        _records[quote].balance = _records[quote].balance.add(amount);
+    }
+
+    function _baseTokenTransferOut(
+        address base,
+        address to,
+        uint256 amount
+    ) public {
+        // console.log("_baseTokenTransferOut (base, to, amount)"); //TRADE_DEBUG
+
+        IERC20(base).transfer(to, amount);
+        _records[base].balance = _records[base].balance.sub(amount);
+    }
+
+    function _quoteTokenTransferOut(
+        address quote,
+        address to,
+        uint256 amount
+    ) public {
+        // console.log("_quoteTokenTransferOut (quote, to, amount)"); //TRADE_DEBUG
+        IERC20(quote).transfer(to, amount);
+        _records[quote].balance = _records[quote].balance.sub(amount);
+        // console.log("_quoteTokenTransferOut quoteBalance is %s", quoteToken.balance); //TRADE_DEBUG
+    }
+}
+
+contract LiquidityProvider is Storage, LPToken {
+    using SafeMath for uint256;
+
+    event LOG_SWAP(
+        address indexed caller,
+        address indexed tokenIn,
+        address indexed tokenOut,
+        uint256 tokenAmountIn,
+        uint256 tokenAmountOut
+    );
+
+    event LOG_JOIN(
+        address indexed caller,
+        address indexed tokenIn,
+        uint256 tokenAmountIn
+    );
+
+    event LOG_EXIT(
+        address indexed caller,
+        address indexed tokenOut,
+        uint256 tokenAmountOut
+    );
 
     // Absorb any tokens that have been sent to this contract into the pool
     function gulp(address token) external _logs_ _lock_ {
@@ -1146,987 +2180,17 @@ contract PFOLIO is BToken {
 
         return poolAmountIn;
     }
+}
 
-    // ==
-    // 'Underlying' token-manipulation functions make external calls but are NOT locked
-    // You must `_lock_` or otherwise ensure reentry-safety
-
-    function _pullUnderlying(
-        address erc20,
-        address from,
-        uint256 amount
-    ) internal {
-        bool xfer = IERC20(erc20).transferFrom(from, address(this), amount);
-        require(xfer, "ERR_ERC20_FALSE");
+contract PFOLIO is LiquidityProvider, Trading, Admin {
+    constructor() public {
+        _controller = msg.sender;
+        _factory = msg.sender;
+        _swapFee = MIN_FEE;
+        _publicSwap = false;
+        _finalized = false;
+        _K_ = 10**17;
+        _SUPERVISOR_ = msg.sender; // could freeze system in emergency
+        _MAINTAINER_ = msg.sender; // collect maintainer fee to buy food for DODO
     }
-
-    function _pushUnderlying(
-        address erc20,
-        address to,
-        uint256 amount
-    ) internal {
-        bool xfer = IERC20(erc20).transfer(to, amount);
-        require(xfer, "ERR_ERC20_FALSE");
-    }
-
-    function _pullPoolShare(address from, uint256 amount) internal {
-        _pull(from, amount);
-    }
-
-    function _pushPoolShare(address to, uint256 amount) internal {
-        _push(to, amount);
-    }
-
-    function _mintPoolShare(uint256 amount) internal {
-        _mint(amount);
-    }
-
-    function _burnPoolShare(uint256 amount) internal {
-        _burn(amount);
-    }
-
-    // InitializableOwnable
-
-    address public _OWNER_;
-    address public _NEW_OWNER_;
-
-    // ============ Events ============
-
-    event OwnershipTransferPrepared(
-        address indexed previousOwner,
-        address indexed newOwner
-    );
-
-    event OwnershipTransferred(
-        address indexed previousOwner,
-        address indexed newOwner
-    );
-
-    // ============ Modifiers ============
-
-    modifier onlyOwner() {
-        require(msg.sender == _OWNER_, "NOT_OWNER");
-        _;
-    }
-
-    // ============ Functions ============
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "INVALID_OWNER");
-        emit OwnershipTransferPrepared(_OWNER_, newOwner);
-        _NEW_OWNER_ = newOwner;
-    }
-
-    function claimOwnership() external {
-        require(msg.sender == _NEW_OWNER_, "INVALID_CLAIM");
-        emit OwnershipTransferred(_OWNER_, _NEW_OWNER_);
-        _OWNER_ = _NEW_OWNER_;
-        _NEW_OWNER_ = address(0);
-    }
-
-    // ReentrancyGuard
-
-    // https://solidity.readthedocs.io/en/latest/control-structures.html?highlight=zero-state#scoping-and-declarations
-    // zero-state of _ENTERED_ is false
-    bool private _ENTERED_;
-
-    modifier preventReentrant() {
-        require(!_ENTERED_, "REENTRANT");
-        _ENTERED_ = true;
-        _;
-        _ENTERED_ = false;
-    }
-
-    // Storage
-
-    struct Record {
-        bool bound; // is token bound to pool
-        uint256 index; // private
-        uint256 balance;
-        Types.RStatus RStatus;
-        uint256 targetTokenAmount;
-        uint256 balanceLimit;
-        address token;
-    }
-
-    // ============ Core Address ============
-
-    address public _SUPERVISOR_; // could freeze system in emergency
-    address public _MAINTAINER_; // collect maintainer fee to buy food for DODO
-
-    mapping(address => mapping(address => uint256)) internal _oracles;
-
-    // ============ Variables for PMM Algorithm ============
-
-    uint256 public _LP_FEE_RATE_;
-    uint256 public _MT_FEE_RATE_;
-    uint256 public _K_;
-
-    // ============ Modifiers ============
-
-    modifier onlySupervisorOrOwner() {
-        require(
-            msg.sender == _SUPERVISOR_ || msg.sender == _OWNER_,
-            "NOT_SUPERVISOR_OR_OWNER"
-        );
-        _;
-    }
-
-    // ============ Helper Functions ============
-
-    function _checkDODOParameters() internal view returns (uint256) {
-        require(_K_ < DecimalMath.ONE, "K>=1");
-        require(_K_ > 0, "K=0");
-        require(
-            _LP_FEE_RATE_.add(_MT_FEE_RATE_) < DecimalMath.ONE,
-            "FEE_RATE>=1"
-        );
-    }
-
-    function getOraclePrice(address base, address quote)
-        public
-        view
-        returns (uint256)
-    {
-        // return IOracle(_ORACLE_).getPrice();
-        // return 5 * (10**3);
-        return _oracles[base][quote];
-    }
-
-    function getBaseCapitalBalanceOf(address base, address lp)
-        public
-        view
-        returns (uint256)
-    {
-        return IDODOLpToken(base).balanceOf(lp);
-    }
-
-    function getTotalBaseCapital(address base) public view returns (uint256) {
-        return IDODOLpToken(base).totalSupply();
-    }
-
-    function getQuoteCapitalBalanceOf(address quote, address lp)
-        public
-        view
-        returns (uint256)
-    {
-        return IDODOLpToken(quote).balanceOf(lp);
-    }
-
-    function getTotalQuoteCapital(address quote) public view returns (uint256) {
-        return IDODOLpToken(quote).totalSupply();
-    }
-
-    // ============ Version Control ============
-    function version() external pure returns (uint256) {
-        return 101; // 1.0.1
-    }
-
-    // Settlement
-    using SafeMath for uint256;
-    // using SafeERC20 for IERC20;
-
-    // ============ Events ============
-
-    event Donate(uint256 amount, bool isBaseToken);
-
-    event ClaimAssets(
-        address indexed user,
-        uint256 baseTokenAmount,
-        uint256 quoteTokenAmount
-    );
-
-    // ============ Assets IN/OUT Functions ============
-
-    function _baseTokenTransferIn(
-        address base,
-        address from,
-        uint256 amount
-    ) public {
-        //         if (DEBUG_TRADE) { console.log("_baseTokenTransferIn (base, from, amount)");} //TRADE_DEBUG
-        Record memory baseToken = _records[base];
-        require(
-            baseToken.balance.add(amount) <= baseToken.balanceLimit,
-            "BASE_BALANCE_LIMIT_EXCEEDED"
-        );
-        IERC20(base).transferFrom(from, address(this), amount);
-        baseToken.balance = baseToken.balance.add(amount);
-        //         if (DEBUG_TRADE) { console.log("_baseTokenTransferIn baseBalance is %s", baseToken.balance);} //TRADE_DEBUG
-    }
-
-    function _quoteTokenTransferIn(
-        address quote,
-        address from,
-        uint256 amount
-    ) public {
-        //         if (DEBUG_TRADE) { console.log("_quoteTokenTransferIn (quote, from, amount)");} //TRADE_DEBUG
-        Record memory quoteToken = _records[quote];
-        require(
-            quoteToken.balance.add(amount) <= quoteToken.balanceLimit,
-            "QUOTE_BALANCE_LIMIT_EXCEEDED"
-        );
-        IERC20(quote).transferFrom(from, address(this), amount);
-        quoteToken.balance = quoteToken.balance.add(amount);
-    }
-
-    function _baseTokenTransferOut(
-        address base,
-        address to,
-        uint256 amount
-    ) public {
-        //         if (DEBUG_TRADE) { console.log("_baseTokenTransferOut (base, to, amount)");} //TRADE_DEBUG
-        Record memory baseToken = _records[base];
-        IERC20(base).transfer(to, amount);
-        baseToken.balance = baseToken.balance.sub(amount);
-    }
-
-    function _quoteTokenTransferOut(
-        address quote,
-        address to,
-        uint256 amount
-    ) public {
-        //         if (DEBUG_TRADE) { console.log("_quoteTokenTransferOut (quote, to, amount)");} //TRADE_DEBUG
-        Record memory quoteToken = _records[quote];
-        IERC20(quote).transfer(to, amount);
-        quoteToken.balance = quoteToken.balance.sub(amount);
-        //         if (DEBUG_TRADE) { console.log("_quoteTokenTransferOut quoteBalance is %s", quoteToken.balance);} //TRADE_DEBUG
-    }
-
-    // Trader
-
-    // ============ Events ============
-
-    event SellBaseToken(
-        address indexed seller,
-        uint256 payBase,
-        uint256 receiveQuote
-    );
-
-    event BuyBaseToken(
-        address indexed buyer,
-        uint256 receiveBase,
-        uint256 payQuote
-    );
-
-    event ChargeMaintainerFee(
-        address indexed maintainer,
-        bool isBaseToken,
-        uint256 amount
-    );
-
-    // ============ Trade Functions ============
-
-    function sellBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 minReceiveQuote
-    )
-        external
-        // bytes calldata data
-        // ) external tradeAllowed sellingAllowed gasPriceLimit preventReentrant returns (uint256) {
-        preventReentrant
-        returns (uint256)
-    {
-        //          if (DEBUG_TRADE) { console.log("sellBaseToken (base, quote, amount, minReceiveQuote)"); //TRADE_DEBUG
-        //          console.log("sellBaseToken (base, quote, %s, %s)", amount, minReceiveQuote);} //TRADE_DEBUG
-
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
-        // query price
-        (
-            uint256 receiveQuote,
-            // uint256 lpFeeQuote,
-            // uint256 mtFeeQuote,
-            Types.RStatus newRStatus,
-            uint256 newQuoteTarget,
-            uint256 newBaseTarget
-        ) = querySellBaseToken(base, quote, amount);
-        //         if (DEBUG_TRADE) { console.log("sellBaseToken: receiveQuote is %s", receiveQuote);} //TRADE_DEBUG
-
-        require(
-            receiveQuote >= minReceiveQuote,
-            "SELL_BASE_RECEIVE_NOT_ENOUGH"
-        );
-
-        // settle assets
-        _quoteTokenTransferOut(quote, msg.sender, receiveQuote);
-
-        _baseTokenTransferIn(base, msg.sender, amount);
-
-        // update TARGET
-        if (quoteToken.targetTokenAmount != newQuoteTarget) {
-            quoteToken.targetTokenAmount = newQuoteTarget;
-        }
-        if (baseToken.targetTokenAmount != newBaseTarget) {
-            baseToken.targetTokenAmount = newBaseTarget;
-        }
-        if (baseToken.RStatus != newRStatus) {
-            baseToken.RStatus = newRStatus;
-        }
-
-        // _donateQuoteToken(lpFeeQuote);
-        emit SellBaseToken(msg.sender, amount, receiveQuote);
-
-        return receiveQuote;
-    }
-
-    function buyBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 maxPayQuote
-    )
-        external
-        // bytes calldata data
-        // ) external tradeAllowed buyingAllowed gasPriceLimit preventReentrant returns (uint256) {
-        preventReentrant
-        returns (uint256)
-    {
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
-
-        // query price
-        (
-            uint256 payQuote,
-            Types.RStatus newRStatus,
-            uint256 newQuoteTarget,
-            uint256 newBaseTarget
-        ) = queryBuyBaseToken(base, quote, amount);
-        require(payQuote <= maxPayQuote, "BUY_BASE_COST_TOO_MUCH");
-
-        // settle assets
-        _baseTokenTransferOut(base, msg.sender, amount);
-
-        _quoteTokenTransferIn(quote, msg.sender, payQuote);
-
-        // update TARGET
-        if (quoteToken.targetTokenAmount != newQuoteTarget) {
-            quoteToken.targetTokenAmount = newQuoteTarget;
-        }
-        if (baseToken.targetTokenAmount != newBaseTarget) {
-            baseToken.targetTokenAmount = newBaseTarget;
-        }
-        if (baseToken.RStatus != newRStatus) {
-            baseToken.RStatus = newRStatus;
-        }
-
-        // _donateBaseToken(lpFeeBase);
-        emit BuyBaseToken(msg.sender, amount, payQuote);
-
-        return payQuote;
-    }
-
-    // ============ Query Functions ============
-
-    function querySellBaseToken(
-        address base,
-        address quote,
-        uint256 amount
-    )
-        public
-        view
-        returns (
-            uint256 receiveQuote,
-            // uint256 lpFeeQuote,
-            // uint256 mtFeeQuote,
-            Types.RStatus newRStatus,
-            uint256 newQuoteTarget,
-            uint256 newBaseTarget
-        )
-    {
-        //         if (DEBUG_PRICE) {         console.log("querySellBaseToken (base, quote, amount)"); //PRICE_DEBUG
-        //         console.log("querySellBaseToken (%s, %s, %s)", base, quote, amount);} //PRICE_DEBUG
-
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
-
-        (newBaseTarget, newQuoteTarget) = getExpectedTarget(
-            baseToken.token,
-            quoteToken.token
-        );
-
-        uint256 sellBaseAmount = amount;
-
-        //         if (DEBUG_PRICE) {         console.log("queryBuyBaseToken: R is %s", mapR(baseToken.RStatus)); } //PRICE_DEBUG
-
-        if (baseToken.RStatus == Types.RStatus.ONE) {
-            // case 1: R=1
-            // R falls below one
-            receiveQuote = _ROneSellBaseToken(
-                baseToken.token,
-                quoteToken.token,
-                sellBaseAmount,
-                newQuoteTarget
-            );
-            newRStatus = Types.RStatus.BELOW_ONE;
-        } else if (baseToken.RStatus == Types.RStatus.ABOVE_ONE) {
-            uint256 backToOnePayBase = newBaseTarget.sub(baseToken.balance);
-            uint256 backToOneReceiveQuote =
-                quoteToken.balance.sub(newQuoteTarget);
-            // case 2: R>1
-            // complex case, R status depends on trading amount
-            if (sellBaseAmount < backToOnePayBase) {
-                // case 2.1: R status do not change
-                receiveQuote = _RAboveSellBaseToken(
-                    baseToken.token,
-                    quoteToken.token,
-                    sellBaseAmount,
-                    baseToken.balance,
-                    newBaseTarget
-                );
-                newRStatus = Types.RStatus.ABOVE_ONE;
-                if (receiveQuote > backToOneReceiveQuote) {
-                    // [Important corner case!] may enter this branch when some precision problem happens. And consequently contribute to negative spare quote amount
-                    // to make sure spare quote>=0, mannually set receiveQuote=backToOneReceiveQuote
-                    receiveQuote = backToOneReceiveQuote;
-                }
-            } else if (sellBaseAmount == backToOnePayBase) {
-                // case 2.2: R status changes to ONE
-                receiveQuote = backToOneReceiveQuote;
-                newRStatus = Types.RStatus.ONE;
-            } else {
-                // case 2.3: R status changes to BELOW_ONE
-                receiveQuote = backToOneReceiveQuote.add(
-                    _ROneSellBaseToken(
-                        baseToken.token,
-                        quoteToken.token,
-                        sellBaseAmount.sub(backToOnePayBase),
-                        newQuoteTarget
-                    )
-                );
-                newRStatus = Types.RStatus.BELOW_ONE;
-            }
-        } else {
-            // _R_STATUS_ == Types.RStatus.BELOW_ONE
-            // case 3: R<1
-            receiveQuote = _RBelowSellBaseToken(
-                baseToken.token,
-                quoteToken.token,
-                sellBaseAmount,
-                quoteToken.balance,
-                newQuoteTarget
-            );
-            newRStatus = Types.RStatus.BELOW_ONE;
-        }
-
-        //         if (DEBUG_PRICE) {         console.log("querySellBaseToken: receiveQuote is %s", receiveQuote); //PRICE_DEBUG
-        //         console.log("querySellBaseToken: new R is %s", mapR(newRStatus));} //PRICE_DEBUG
-
-        // return (receiveQuote, lpFeeQuote, mtFeeQuote, newRStatus, newQuoteTarget, newBaseTarget);
-        return (receiveQuote, newRStatus, newQuoteTarget, newBaseTarget);
-    }
-
-    function queryBuyBaseToken(
-        address base,
-        address quote,
-        uint256 amount
-    )
-        public
-        view
-        returns (
-            uint256 payQuote,
-            // uint256 lpFeeBase,
-            // uint256 mtFeeBase,
-            Types.RStatus newRStatus,
-            uint256 newQuoteTarget,
-            uint256 newBaseTarget
-        )
-    {
-        //         if (DEBUG_PRICE) {         console.log("queryBuyBaseToken (base, quote, amount)"); //PRICE_DEBUG
-        //         console.log("queryBuyBaseToken (%s, %s, %s)", base, quote, amount);} //PRICE_DEBUG
-
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
-
-        (newBaseTarget, newQuoteTarget) = getExpectedTarget(base, quote);
-
-        //         // console.log("newBaseTarget is %s, newQuoteTarget is %s", newBaseTarget, newQuoteTarget); //PRICE_DEBUG
-
-        // charge fee from user receive amount
-        // lpFeeBase = DecimalMath.mul(amount, 0.3);
-        // mtFeeBase = DecimalMath.mul(amount, _MT_FEE_RATE_);
-        // uint256 buyBaseAmount = amount.add(lpFeeBase).add(mtFeeBase);
-        uint256 buyBaseAmount = amount;
-
-        //         if (DEBUG_PRICE) {         console.log("queryBuyBaseToken: R is %s", getR(base));} //PRICE_DEBUG
-
-        if (baseToken.RStatus == Types.RStatus.ONE) {
-            // case 1: R=1
-            payQuote = _ROneBuyBaseToken(
-                baseToken.token,
-                quoteToken.token,
-                buyBaseAmount,
-                newBaseTarget
-            );
-
-            newRStatus = Types.RStatus.ABOVE_ONE;
-        } else if (baseToken.RStatus == Types.RStatus.ABOVE_ONE) {
-            // case 2: R>1
-            payQuote = _RAboveBuyBaseToken(
-                baseToken.token,
-                quoteToken.token,
-                buyBaseAmount,
-                baseToken.balance,
-                newBaseTarget
-            );
-            newRStatus = Types.RStatus.ABOVE_ONE;
-        } else if (baseToken.RStatus == Types.RStatus.BELOW_ONE) {
-            uint256 backToOnePayQuote = newQuoteTarget.sub(quoteToken.balance);
-            uint256 backToOneReceiveBase = baseToken.balance.sub(newBaseTarget);
-            // case 3: R<1
-            // complex case, R status may change
-            if (buyBaseAmount < backToOneReceiveBase) {
-                // case 3.1: R status do not change
-                // no need to check payQuote because spare base token must be greater than zero
-                payQuote = _RBelowBuyBaseToken(
-                    baseToken.token,
-                    quoteToken.token,
-                    buyBaseAmount,
-                    quoteToken.balance,
-                    newQuoteTarget
-                );
-                newRStatus = Types.RStatus.BELOW_ONE;
-            } else if (buyBaseAmount == backToOneReceiveBase) {
-                // case 3.2: R status changes to ONE
-                payQuote = backToOnePayQuote;
-                newRStatus = Types.RStatus.ONE;
-            } else {
-                // case 3.3: R status changes to ABOVE_ONE
-                payQuote = backToOnePayQuote.add(
-                    _ROneBuyBaseToken(
-                        baseToken.token,
-                        quoteToken.token,
-                        buyBaseAmount.sub(backToOneReceiveBase),
-                        newBaseTarget
-                    )
-                );
-                newRStatus = Types.RStatus.ABOVE_ONE;
-            }
-        }
-
-        //         if (DEBUG_PRICE) {         console.log("queryBuyBaseToken: payQuote is %s", payQuote); //PRICE_DEBUG
-        //         console.log("queryBuyBaseToken: new R is %s", mapR(newRStatus));} //PRICE_DEBUG
-
-        // return (payQuote, lpFeeBase, mtFeeBase, newRStatus, newQuoteTarget, newBaseTarget);
-        return (payQuote, newRStatus, newQuoteTarget, newBaseTarget);
-    }
-
-    // ============ Pricing functions ============
-
-    // ============ R = 1 cases ============
-
-    function _ROneSellBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 targetQuoteTokenAmount
-    ) public view returns (uint256 receiveQuoteToken) {
-        //         if (DEBUG_PRICE) {         console.log("ROneSellBaseToken (base, quote, amount, targetQuoteTokenAmount)"); //PRICE_DEBUG
-        //         console.log("ROneSellBaseToken (base, quote, %s, %s)", amount, targetQuoteTokenAmount);} //PRICE_DEBUG
-
-        uint256 i = getOraclePrice(base, quote);
-        //         if (DEBUG_PRICE) {         console.log("ROneSellBaseToken: Price is %s", i); //PRICE_DEBUG
-
-        //         console.log("SolveQuadraticFunctionForTrade (targetQuote, targetQuote, i*amount, false, k)");} //PRICE_DEBUG
-        uint256 Q2 =
-            DODOMath._SolveQuadraticFunctionForTrade(
-                targetQuoteTokenAmount,
-                targetQuoteTokenAmount,
-                DecimalMath.mul(i, amount),
-                false,
-                _K_
-            );
-
-        //         if (DEBUG_PRICE) {         console.log("ROneSellBaseToken: receiveQuote is targetQuote - Q2"); //PRICE_DEBUG
-        //         console.log("ROneSellBaseToken: receiveQuote is %s - %s", targetQuoteTokenAmount, Q2); //PRICE_DEBUG
-        //         console.log("ROneSellBaseToken: receiveQuote is %s", targetQuoteTokenAmount.sub(Q2));} //PRICE_DEBUG
-        // in theory Q2 <= targetQuoteTokenAmount
-        // however when amount is close to 0, precision problems may cause Q2 > targetQuoteTokenAmount
-        return targetQuoteTokenAmount.sub(Q2);
-    }
-
-    function _ROneBuyBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 targetBaseTokenAmount
-    ) public view returns (uint256 payQuoteToken) {
-        //         if (DEBUG_PRICE) {         console.log("ROneBuyBaseToken  (base, quote, amount, targetBaseTokenAmount)"); //PRICE_DEBUG
-        //         console.log("ROneBuyBaseToken  (base, quote, %s, %s)", amount, targetBaseTokenAmount);} //PRICE_DEBUG
-        require(amount < targetBaseTokenAmount, "DODO_BASE_BALANCE_NOT_ENOUGH");
-        uint256 B2 = targetBaseTokenAmount.sub(amount);
-
-        //         if (DEBUG_PRICE) {         console.log("ROneBuyBaseToken:  New base balance is targetBaseTokenAmount - amount"); //PRICE_DEBUG
-        //         console.log("ROneBuyBaseToken:  New base balance is %s - %s", targetBaseTokenAmount, amount); //PRICE_DEBUG
-        //         console.log("ROneBuyBaseToken:  New base balance is %s", B2);} //PRICE_DEBUG
-
-        payQuoteToken = _RAboveIntegrate(
-            base,
-            quote,
-            targetBaseTokenAmount,
-            targetBaseTokenAmount,
-            B2
-        );
-        return payQuoteToken;
-    }
-
-    // ============ R < 1 cases ============
-
-    function _RBelowSellBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 quoteBalance,
-        uint256 targetQuoteAmount
-    ) public view returns (uint256 receieQuoteToken) {
-        uint256 i = getOraclePrice(base, quote);
-        uint256 Q2 =
-            DODOMath._SolveQuadraticFunctionForTrade(
-                targetQuoteAmount,
-                quoteBalance,
-                DecimalMath.mul(i, amount),
-                false,
-                _K_
-            );
-        return quoteBalance.sub(Q2);
-    }
-
-    function _RBelowBuyBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 quoteBalance,
-        uint256 targetQuoteAmount
-    ) public view returns (uint256 payQuoteToken) {
-        // Here we don't require amount less than some value
-        // Because it is limited at upper function
-        // See Trader.queryBuyBaseToken
-        uint256 i = getOraclePrice(base, quote);
-        uint256 Q2 =
-            DODOMath._SolveQuadraticFunctionForTrade(
-                targetQuoteAmount,
-                quoteBalance,
-                DecimalMath.mulCeil(i, amount),
-                true,
-                _K_
-            );
-        return Q2.sub(quoteBalance);
-    }
-
-    function _RBelowBackToOne(Record memory baseToken, Record memory quoteToken)
-        public
-        view
-        returns (uint256 payQuoteToken)
-    {
-        // important: carefully design the system to make sure spareBase always greater than or equal to 0
-        uint256 spareBase = baseToken.balance.sub(baseToken.targetTokenAmount);
-        uint256 price = getOraclePrice(baseToken.token, quoteToken.token);
-        uint256 fairAmount = DecimalMath.mul(spareBase, price);
-        uint256 newTargetQuote =
-            DODOMath._SolveQuadraticFunctionForTarget(
-                baseToken.balance,
-                _K_,
-                fairAmount
-            );
-        return newTargetQuote.sub(quoteToken.balance);
-    }
-
-    // ============ R > 1 cases ============
-
-    function _RAboveBuyBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 baseBalance,
-        uint256 targetBaseAmount
-    ) public view returns (uint256 payQuoteToken) {
-        require(amount < baseBalance, "DODO_BASE_BALANCE_NOT_ENOUGH");
-        uint256 B2 = baseBalance.sub(amount);
-        return _RAboveIntegrate(base, quote, targetBaseAmount, baseBalance, B2);
-    }
-
-    function _RAboveSellBaseToken(
-        address base,
-        address quote,
-        uint256 amount,
-        uint256 baseBalance,
-        uint256 targetBaseAmount
-    ) public view returns (uint256 receiveQuoteToken) {
-        // here we don't require B1 <= targetBaseAmount
-        // Because it is limited at upper function
-        // See Trader.querySellBaseToken
-        uint256 B1 = baseBalance.add(amount);
-        return _RAboveIntegrate(base, quote, targetBaseAmount, B1, baseBalance);
-    }
-
-    function _RAboveBackToOne(Record memory baseToken, Record memory quoteToken)
-        public
-        view
-        returns (uint256 payBaseToken)
-    {
-        // important: carefully design the system to make sure spareBase always greater than or equal to 0
-        uint256 spareQuote =
-            quoteToken.balance.sub(quoteToken.targetTokenAmount);
-        uint256 price = getOraclePrice(baseToken.token, quoteToken.token);
-        uint256 fairAmount = DecimalMath.divFloor(spareQuote, price);
-        uint256 newTargetBase =
-            DODOMath._SolveQuadraticFunctionForTarget(
-                baseToken.balance,
-                _K_,
-                fairAmount
-            );
-        return newTargetBase.sub(baseToken.balance);
-    }
-
-    // ============ Helper functions ============
-
-    function getExpectedTarget(address base, address quote)
-        public
-        view
-        returns (uint256 baseTarget, uint256 quoteTarget)
-    {
-        //         if (DEBUG_PRICE) {         console.log("getExpectedTarget (base, quote)");} //PRICE_DEBUG
-
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
-
-        uint256 Q = quoteToken.balance;
-        uint256 B = baseToken.balance;
-
-        //         if (DEBUG_PRICE) {         console.log("getExpectedTarget: Base balance is %s, quote balance is %s", Q, B);} //PRICE_DEBUG
-
-        if (baseToken.RStatus == Types.RStatus.ONE) {
-            //         if (DEBUG_PRICE) {         console.log("getExpectedTarget: Base target is  %s, quote target is  %s", baseToken.targetTokenAmount, quoteToken.targetTokenAmount);} //PRICE_DEBUG
-
-            return (baseToken.targetTokenAmount, quoteToken.targetTokenAmount);
-        } else if (baseToken.RStatus == Types.RStatus.BELOW_ONE) {
-            uint256 payQuoteToken = _RBelowBackToOne(baseToken, quoteToken);
-            return (baseToken.targetTokenAmount, Q.add(payQuoteToken));
-        } else if (baseToken.RStatus == Types.RStatus.ABOVE_ONE) {
-            uint256 payBaseToken = _RAboveBackToOne(baseToken, quoteToken);
-            return (B.add(payBaseToken), quoteToken.targetTokenAmount);
-        }
-    }
-
-    // function getMidPrice() public view returns (uint256 midPrice) {
-    //     (uint256 baseTarget, uint256 quoteTarget) = getExpectedTarget();
-    //     if (_R_STATUS_ == Types.RStatus.BELOW_ONE) {
-    //         uint256 R = DecimalMath.divFloor(
-    //             quoteTarget.mul(quoteTarget).div(_QUOTE_BALANCE_),
-    //             _QUOTE_BALANCE_
-    //         );
-    //         R = DecimalMath.ONE.sub(_K_).add(DecimalMath.mul(_K_, R));
-    //         return DecimalMath.divFloor(getOraclePrice(), R);
-    //     } else {
-    //         uint256 R = DecimalMath.divFloor(
-    //             baseTarget.mul(baseTarget).div(_BASE_BALANCE_),
-    //             _BASE_BALANCE_
-    //         );
-    //         R = DecimalMath.ONE.sub(_K_).add(DecimalMath.mul(_K_, R));
-    //         return DecimalMath.mul(getOraclePrice(), R);
-    //     }
-    // }
-
-    function _RAboveIntegrate(
-        address base,
-        address quote,
-        uint256 B0,
-        uint256 B1,
-        uint256 B2
-    ) public view returns (uint256) {
-        //         if (DEBUG_PRICE) {         console.log("RAboveIntegrate   (base, quote, B0, B1, B2)"); //PRICE_DEBUG
-        //         console.log("RAboveIntegrate   (base, quote, %s, %s, %s)", B0, B1, B2);} //PRICE_DEBUG
-        uint256 i = getOraclePrice(base, quote);
-        //         if (DEBUG_PRICE) {         console.log("RAboveIntegrate:   Price is %s", i);} //PRICE_DEBUG
-        return DODOMath._GeneralIntegrate(B0, B1, B2, i, _K_);
-    }
-
-    // ============ Math functions ============
-
-    /*
-        Integrate dodo curve fron V1 to V2
-        require V0>=V1>=V2>0
-        res = (1-k)i(V1-V2)+ikV0*V0(1/V2-1/V1)
-        let V1-V2=delta
-        res = i*delta*(1-k+k(V0^2/V1/V2))
-    */
-    // function GeneralIntegrate(
-    //     uint256 V0,
-    //     uint256 V1,
-    //     uint256 V2,
-    //     uint256 i,
-    //     uint256 k
-    // ) public view returns (uint256) {
-    //     //     if (DEBUG_PRICE) {         console.log("GeneralIntegrate  (V0, V1, V2, i, k)"); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate  (%s, %s, %s, i, k)", V0, V1, V2); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate  (..., ..., ..., %s, %s)", i, k);} //PRICE_DEBUG
-    //     uint256 fairAmount = DecimalMath.mul(i, V1.sub(V2)); // i*delta
-    //     //     if (DEBUG_PRICE) {         console.log("GeneralIntegrate:  fairAmount is i  * (B2 - B1)"); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  fairAmount is %s * (%s - %s)", i, V1, V2); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  fairAmount is %s * %s", i, V1.sub(V2)); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  fairAmount is %s", fairAmount);} //PRICE_DEBUG
-    //     uint256 V0V0V1V2 = DecimalMath.divCeil(V0.mul(V0).div(V1), V2);
-    //     uint256 penalty = DecimalMath.mul(k, V0V0V1V2); // k(V0^2/V1/V2)
-    //     //     if (DEBUG_PRICE) {         console.log("GeneralIntegrate:  penalty is k   * (B0^2/V1/V2)"); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  penalty is k   * (%s^2/%s/%s)", V0, V1, V2); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  penalty is k   * (%s/%s/%s)", V0.mul(V0), V1, V2); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  penalty is k   * (%s/%s)", V0.mul(V0).div(V1), V2); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  penalty is k   * (%s)", V0V0V1V2); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  penalty is 0.1 * (%s)", V0V0V1V2); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  penalty is %s", penalty); //PRICE_DEBUG
-
-    //     //     console.log("GeneralIntegrate:  deltaQ  is fairAmount * (1-k + penalty)"); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  deltaQ  is %s * (%s + %s)", fairAmount, DecimalMath.ONE.sub(k), penalty); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  deltaQ  is %s * %s", fairAmount, DecimalMath.ONE.sub(k).add(penalty)); //PRICE_DEBUG
-    //     //     console.log("GeneralIntegrate:  deltaQ  is %s", DecimalMath.mul(fairAmount, DecimalMath.ONE.sub(k).add(penalty)));} //PRICE_DEBUG
-    //     return DecimalMath.mul(fairAmount, DecimalMath.ONE.sub(k).add(penalty));
-    // }
-
-    /*
-        The same with integration expression above, we have:
-        i*deltaB = (Q2-Q1)*(1-k+kQ0^2/Q1/Q2)
-        Given Q1 and deltaB, solve Q2
-        This is a quadratic function and the standard version is
-        aQ2^2 + bQ2 + c = 0, where
-        a=1-k
-        -b=(1-k)Q1-kQ0^2/Q1+i*deltaB
-        c=-kQ0^2
-        and Q2=(-b+sqrt(b^2+4(1-k)kQ0^2))/2(1-k)
-        note: another root is negative, abondan
-        if deltaBSig=true, then Q2>Q1
-        if deltaBSig=false, then Q2<Q1
-    */
-    // function SolveQuadraticFunctionForTrade(
-    //     uint256 Q0,
-    //     uint256 Q1,
-    //     uint256 ideltaB,
-    //     bool deltaBSig,
-    //     uint256 k
-    // ) public view returns (uint256) {
-
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade (Q0, Q1, ideltaB, deltaBSig, k)"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade Q0 is %s", Q0); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade Q1 is %s", Q1); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade ideltaB is %s", ideltaB); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade deltaBSig is %s", deltaBSig); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade k is %s", k); //PRICE_DEBUG
-
-    //     //     console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2+4ac))/2a"); //PRICE_DEBUG
-
-    //     //     console.log("SolveQuadraticFunctionForTrade:  b is (kQ0^2/Q1)-Q1+(kQ1)-(i*deltaB)"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: -b is (1-k)Q1-(kQ0^2/Q1)+(i*deltaB)");} //PRICE_DEBUG
-    //     // calculate -b value and sig
-    //     // -b = (1-k)Q1-kQ0^2/Q1+i*deltaB
-    //     uint256 kQ02Q1 = DecimalMath.mul(k, Q0).mul(Q0).div(Q1); // kQ0^2/Q1
-
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is k*%s*%s/%s", Q0, Q0, Q1); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is %s*%s/%s", DecimalMath.mul(k, Q0), Q0, Q1); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is %s/%s", DecimalMath.mul(k, Q0).mul(Q0), Q1); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: kQ0Q0/Q1 is %s", kQ02Q1);} //PRICE_DEBUG
-
-    //     uint256 b = DecimalMath.mul(DecimalMath.ONE.sub(k), Q1); // (1-k)Q1
-
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade: (1-k)Q1 is 0.9*%s", Q1); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: (1-k)Q1 is %s", b);} //PRICE_DEBUG
-
-    //     bool minusbSig = true;
-    //     if (deltaBSig) {
-    //     //         if (DEBUG_PRICE) {             console.log("SolveQuadraticFunctionForTrade: (1-k)Q1+(i*deltaB) is %s+%s", b, ideltaB);} //PRICE_DEBUG
-    //         b = b.add(ideltaB); // (1-k)Q1+i*deltaB
-    //     //         if (DEBUG_PRICE) {             console.log("SolveQuadraticFunctionForTrade: (1-k)Q1+(i*deltaB) is %s", b);} //PRICE_DEBUG
-    //     } else {
-    //     //         if (DEBUG_PRICE) {             console.log("SolveQuadraticFunctionForTrade: (kQ0^2/Q1)+(i*deltaB) is %s+%s", kQ02Q1, ideltaB);} //PRICE_DEBUG
-    //         kQ02Q1 = kQ02Q1.add(ideltaB); // i*deltaB+kQ0^2/Q1
-    //     //         if (DEBUG_PRICE) {             console.log("SolveQuadraticFunctionForTrade: (kQ0^2/Q1)+(i*deltaB) is %s", kQ02Q1);} //PRICE_DEBUG
-    //     }
-
-    //     //      if (DEBUG_PRICE) {          console.log("SolveQuadraticFunctionForTrade: -b is (1-k)Q1-(kQ0^2/Q1)+(i*deltaB)"); //PRICE_DEBUG
-    //     //      console.log("SolveQuadraticFunctionForTrade: -b is %s-%s", b, kQ02Q1);} //PRICE_DEBUG
-    //     if (b >= kQ02Q1) {
-    //         b = b.sub(kQ02Q1);
-    //         minusbSig = true;
-    //     //         if (DEBUG_PRICE) {          console.log("SolveQuadraticFunctionForTrade: -b is %s", b);} //PRICE_DEBUG
-    //     } else {
-    //         b = kQ02Q1.sub(b);
-    //         minusbSig = false;
-    //     //         if (DEBUG_PRICE) {          console.log("SolveQuadraticFunctionForTrade: -b is -%s", b);} //PRICE_DEBUG
-    //     }
-
-    //     // calculate sqrt
-    //     uint256 squareRoot = DecimalMath.mul(
-    //         DecimalMath.ONE.sub(k).mul(4),
-    //         DecimalMath.mul(k, Q0).mul(Q0)
-    //     ); // 4(1-k)kQ0^2
-
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2+4ac))/2a"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: 4a is 4(1-k)"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: 4a is 4(0.9)"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: 4a is %s", DecimalMath.ONE.sub(k).mul(4)); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: c is kQ0^2"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: c is 0.1*%s*%s", Q0, Q0); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: c is %s", DecimalMath.mul(k, Q0).mul(Q0)); } //PRICE_DEBUG
-    //     uint256 a4 = DecimalMath.ONE.sub(k).mul(4);
-    //     uint256 c  = DecimalMath.mul(k, Q0).mul(Q0);
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade: 4ac is %s*%s", a4, c); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: 4ac is %s", squareRoot); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2+4ac))/2a"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(b^2 + %s))/2a", squareRoot); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(%s^2 + %s))/2a", b, squareRoot); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(%s + %s))/2a", b.mul(b), squareRoot); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + sqrt(%s))/2a", b.mul(b).add(squareRoot));} //PRICE_DEBUG
-    //     squareRoot = b.mul(b).add(squareRoot).sqrt(); // sqrt(b*b+4(1-k)kQ0*Q0)
-
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade: Q2 is (-b + %s)/2a", squareRoot);} //PRICE_DEBUG
-
-    //     // final res
-    //     uint256 denominator = DecimalMath.ONE.sub(k).mul(2); // 2(1-k)
-
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade: 2a is 2(1-k)"); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: 2a is 2(%s - %s)",DecimalMath.ONE, k); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: 2a is 2(%s)", DecimalMath.ONE.sub(k)); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: 2a is %s", denominator);} //PRICE_DEBUG
-
-    //     uint256 numerator;
-    //     if (minusbSig) {
-    //         numerator = b.add(squareRoot);
-
-    //     //     if (DEBUG_PRICE) {         console.log("SolveQuadraticFunctionForTrade: Q2 is (%s + %s)/%s", squareRoot, b, denominator); //PRICE_DEBUG
-    //     //     console.log("SolveQuadraticFunctionForTrade: Q2 is %s/%s", numerator, denominator);} //PRICE_DEBUG
-
-    //     } else {
-    //         numerator = squareRoot.sub(b);
-
-    //     //         if (DEBUG_PRICE) {             console.log("SolveQuadraticFunctionForTrade: Q2 is (%s - %s)/%s", squareRoot, b, denominator); //PRICE_DEBUG
-    //     //         console.log("SolveQuadraticFunctionForTrade: Q2 is %s/%s", numerator, denominator);} //PRICE_DEBUG
-    //     }
-
-    //     if (deltaBSig) {
-
-    //     //         if (DEBUG_PRICE) {             console.log("SolveQuadraticFunctionForTrade: Q2 is %s", DecimalMath.divFloor(numerator, denominator));} //PRICE_DEBUG
-    //         return DecimalMath.divFloor(numerator, denominator);
-    //     } else {
-    //     //         if (DEBUG_PRICE) {             console.log("SolveQuadraticFunctionForTrade: Q2 is %s", DecimalMath.divCeil(numerator, denominator));} //PRICE_DEBUG
-    //         return DecimalMath.divCeil(numerator, denominator);
-    //     }
-    // }
-
-    /*
-        Start from the integration function
-        i*deltaB = (Q2-Q1)*(1-k+kQ0^2/Q1/Q2)
-        Assume Q2=Q0, Given Q1 and deltaB, solve Q0
-        let fairAmount = i*deltaB
-    */
-    // function SolveQuadraticFunctionForTarget(
-    //     uint256 V1,
-    //     uint256 k,
-    //     uint256 fairAmount
-    // ) public pure returns (uint256 V0) {
-    //     // V0 = V1+V1*(sqrt-1)/2k
-    //     uint256 sqrt = DecimalMath.divCeil(DecimalMath.mul(k, fairAmount).mul(4), V1);
-    //     sqrt = sqrt.add(DecimalMath.ONE).mul(DecimalMath.ONE).sqrt();
-    //     uint256 premium = DecimalMath.divCeil(sqrt.sub(DecimalMath.ONE), k.mul(2));
-    //     // V0 is greater than or equal to V1 according to the solution
-    //     return DecimalMath.mul(V1, DecimalMath.ONE.add(premium));
-    // }
 }
