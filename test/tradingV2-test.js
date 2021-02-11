@@ -10,9 +10,15 @@ describe("PFOLIO V2 trading", function () {
   let owner;
   let addrs;
   let fundSize;
-  let bindSize;
   let priceOne;
   let tradeOne;
+
+  let ten = ethers.BigNumber.from("10");
+  let ONE = ten.pow(18);
+  let PERCENT = ONE.div(100);
+  let bindSize = ten.pow(17).mul(1);
+  let min = PERCENT.mul(30);
+  let max = PERCENT.mul(70);
 
   tstr = (n) => n.toString();
 
@@ -37,11 +43,9 @@ describe("PFOLIO V2 trading", function () {
     await token2.approve(pfolio.address, fundSize);
     await token3.approve(pfolio.address, fundSize);
 
-    bindSize = Math.pow(10, 17).toString();
-
-    await pfolio.bind(token1.address, bindSize);
-    await pfolio.bind(token2.address, bindSize);
-    await pfolio.bind(token3.address, bindSize);
+    await pfolio.bind(token1.address, bindSize, min, max);
+    await pfolio.bind(token2.address, bindSize, min, max);
+    await pfolio.bind(token3.address, bindSize, min, max);
 
     priceOne = Math.pow(10, 18);
     tradeOne = Math.pow(10, 11);
