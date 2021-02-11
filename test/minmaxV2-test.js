@@ -17,6 +17,7 @@ describe("PFOLIO V2 minmax", function () {
   let addrs;
   let ten = ethers.BigNumber.from("10");
   let ONE = ten.pow(18);
+  let PERCENT = ONE.div(100);
   let fundSize = ten.pow(25).toString();
 
   tstr = (n) => n.toString();
@@ -50,15 +51,20 @@ describe("PFOLIO V2 minmax", function () {
     it("Should get share 1/3", async function () {
 
       let bindSize = Math.pow(10, 17).toString();
-      await pfolio.bind(token1.address, bindSize);
-      await pfolio.bind(token2.address, bindSize);
-      await pfolio.bind(token3.address, bindSize);
+      let min = PERCENT.mul(30);
+      let max = PERCENT.mul(70);
+
+      await pfolio.bind(token1.address, bindSize, min, max);
+      await pfolio.bind(token2.address, bindSize, min, max);
+      await pfolio.bind(token3.address, bindSize, min, max);
 
       const price  = (1*ONE).toString();
 
       await pfolio.setOraclePrice(token1.address, price);
       await pfolio.setOraclePrice(token2.address, price);
       await pfolio.setOraclePrice(token3.address, price);
+
+      await pfolio.updatePortfolioValue();
 
       share = await pfolio.getCurrentShare(token1.address)
         .then(tstr)
@@ -71,9 +77,12 @@ describe("PFOLIO V2 minmax", function () {
     it("Should get share 1/5", async function () {
 
       let bindSize = Math.pow(10, 17).toString();
-      await pfolio.bind(token1.address, bindSize);
-      await pfolio.bind(token2.address, bindSize);
-      await pfolio.bind(token3.address, bindSize);
+      let min = PERCENT.mul(30);
+      let max = PERCENT.mul(70);
+
+      await pfolio.bind(token1.address, bindSize, min, max);
+      await pfolio.bind(token2.address, bindSize, min, max);
+      await pfolio.bind(token3.address, bindSize, min, max);
 
       const price1  = (1*ONE).toString();
       const price2  = (2*ONE).toString();
@@ -82,6 +91,8 @@ describe("PFOLIO V2 minmax", function () {
       await pfolio.setOraclePrice(token1.address, price1);
       await pfolio.setOraclePrice(token2.address, price2);
       await pfolio.setOraclePrice(token3.address, price3);
+
+      await pfolio.updatePortfolioValue();
 
       share = await pfolio.getCurrentShare(token1.address)
         .then(tstr)
@@ -94,9 +105,12 @@ describe("PFOLIO V2 minmax", function () {
     it("Should stay within limits and succeed", async function () {
 
       let bindSize = ten.pow(17).toString();
-      await pfolio.bind(token1.address, bindSize);
-      await pfolio.bind(token2.address, bindSize);
-      await pfolio.bind(token3.address, bindSize);
+      let min = PERCENT.mul(30);
+      let max = PERCENT.mul(70);
+
+      await pfolio.bind(token1.address, bindSize, min, max);
+      await pfolio.bind(token2.address, bindSize, min, max);
+      await pfolio.bind(token3.address, bindSize, min, max);
 
       const price  = (ONE.mul(1)).toString();
 
@@ -112,9 +126,12 @@ describe("PFOLIO V2 minmax", function () {
     it("Should leave share limits and fail", async function () {
 
       let bindSize = ten.pow(17).toString();
-      await pfolio.bind(token1.address, bindSize);
-      await pfolio.bind(token2.address, bindSize);
-      await pfolio.bind(token3.address, bindSize);
+      let min = PERCENT.mul(30);
+      let max = PERCENT.mul(70);
+
+      await pfolio.bind(token1.address, bindSize, min, max);
+      await pfolio.bind(token2.address, bindSize, min, max);
+      await pfolio.bind(token3.address, bindSize, min, max);
 
       const price  = (ONE.mul(1)).toString();
 

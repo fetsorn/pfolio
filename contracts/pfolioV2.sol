@@ -700,9 +700,12 @@ contract Storage {
         uint256 index; // private
         uint256 balance;
         Types.RStatus RStatus;
-        uint256 targetTokenAmount;
+        uint256 target;
         uint256 balanceLimit;
         address token;
+        uint256 price;
+        uint256 min;
+        uint256 max;
     }
 
     address public _factory; // BFactory address to push token exitFee to
@@ -720,6 +723,8 @@ contract Storage {
     bool public DEBUG_TRADE = true;
 
     mapping(address => Record) public _records;
+
+    uint256 public _portfolioValue;
 
     event LOG_CALL(
         bytes4 indexed sig,
@@ -798,7 +803,7 @@ contract Storage {
         returns (uint256)
     {
         require(_records[token].bound, "ERR_NOT_BOUND");
-        return _records[token].targetTokenAmount;
+        return _records[token].target;
     }
 
     function getR(address token)
@@ -829,6 +834,26 @@ contract Storage {
         }
     }
 
+    function getMin(address token)
+        external
+        view
+        _viewlock_
+        returns (uint256 min)
+    {
+        require(_records[token].bound, "ERR_NOT_BOUND");
+        return _records[token].min;
+    }
+
+    function getMax(address token)
+        external
+        view
+        _viewlock_
+        returns (uint256 max)
+    {
+        require(_records[token].bound, "ERR_NOT_BOUND");
+        return _records[token].max;
+    }
+
     function getSwapFee() external view _viewlock_ returns (uint256) {
         return _swapFee;
     }
@@ -837,7 +862,19 @@ contract Storage {
         return _controller;
     }
 
-    function getOraclePrice(address token)
+    //TODO: will take prices from oracles
+    function setOraclePrice(
+        address token,
+        uint256 price
+    ) external {
+        // TODO: fails ungracefully on unbound tokens
+        // TODO: mock function, will take pricefeeds from oracles
+        _records[token].price = price;
+    }
+
+    // price in usd in decimal 10**18
+    // assumes token price is up-to-date
+    function getAssetPrice(address token)
         public
         view
         returns (uint256)
@@ -845,19 +882,11 @@ contract Storage {
         // TODO: fails ungracefully on unbound tokens
         // TODO: mock function, will take pricefeeds from oracles
         // TODO: assumes all pricefeeds have the same precision, will have to convert in prod
-        return _prices[token];
+        return _records[token].price;
     }
 
-    function setOraclePrice(
-        address token,
-        uint256 price
-    ) external returns (uint256) {
-        // TODO: fails ungracefully on unbound tokens
-        // TODO: mock function, will take pricefeeds from oracles
-        _prices[token] = price;
-        return _prices[token];
-    }
-
+    // price base relative to quote in decimal 10**18
+    // assumes asset prices are up-to-date
     function getTransactionPrice(address base, address quote)
         public
         view
@@ -866,73 +895,70 @@ contract Storage {
         // TODO: fails ungracefully on unbound tokens
         // TODO: mock function, will take pricefeeds from oracles
         // TODO: choose the sort of division - floor, ceiling
-        return DecimalMath.divFloor(getOraclePrice(base), getOraclePrice(quote));
+        return DecimalMath.divFloor(_records[base].price, _records[quote].price);
     }
 
-    function getPortfolioValue() public view returns (uint256) {
+    // assumes asset prices are up-to-date
+    function updatePortfolioValue() public {
 
         uint i;
         address token;
         uint256 value;
-        uint256 wholeValue = 0;
+        _portfolioValue = 0;
 
         // console.log("_tokens length is %s", _tokens.length); // ORACLE_DEBUG
 
         for(i = 0; i < _tokens.length; i++) {
           token = _tokens[i];
-          value = _records[token].balance.mul(getOraclePrice(token)); // balance * price
+          value = _records[token].balance.mul(_records[token].price); // balance * price
 
         // console.log("token %s value is %s", i+1, value); // ORACLE_DEBUG
 
-          wholeValue = wholeValue.add(value);
+          _portfolioValue = _portfolioValue.add(value);
         }
 
-        return wholeValue;
     }
 
-
+    // assumes asset prices and _portfolioValue are up-to-date
     function getCurrentShare(address asset) public view returns (uint256) {
 
-        uint256 assetValue = _records[asset].balance.mul(getOraclePrice(asset));
+        uint256 assetValue = _records[asset].balance.mul(_records[asset].price);
 
         // console.log("token value is %s", value); // ORACLE_DEBUG
 
-        uint256 wholeValue = getPortfolioValue();
-
-        return DecimalMath.divFloor(assetValue, wholeValue);
+        return DecimalMath.divFloor(assetValue, _portfolioValue);
     }
 
-    // TODO: add to record, update on all balance changes
-     function getShare(address base,
-                       address quote,
-                       uint256 baseBalanceAfterTx,
-                       uint256 quoteBalanceAfterTx
-                       ) public view returns (uint256 baseShare, uint256 quoteShare) {
+     // assumes asset prices and _portfolioValue are up-to-date
+     function checkSharesAfterTx(address base,
+                                 address quote,
+                                 uint256 baseBalanceAfterTx,
+                                 uint256 quoteBalanceAfterTx
+                                 ) public view {
         // take price of token1 in usd
         // take price of all tokens in usd - in state?
         /// add all shares of tokens from balances
         // decimal divide
 
-        uint256 baseValueBeforeTx = _records[base].balance.mul(getOraclePrice(base));
-        uint256 quoteValueBeforeTx = _records[quote].balance.mul(getOraclePrice(quote));
+        uint256 baseValueBeforeTx = _records[base].balance.mul(_records[base].price);
+        uint256 quoteValueBeforeTx = _records[quote].balance.mul(_records[quote].price);
 
-        uint256 baseValueAfterTx = baseBalanceAfterTx.mul(getOraclePrice(base));
-        uint256 quoteValueAfterTx = quoteBalanceAfterTx.mul(getOraclePrice(quote));
+        uint256 baseValueAfterTx = baseBalanceAfterTx.mul(_records[base].price);
+        uint256 quoteValueAfterTx = quoteBalanceAfterTx.mul(_records[quote].price);
 
         // console.log("token value is %s", value); // ORACLE_DEBUG
-
-        uint256 wholeValueBeforeTx = getPortfolioValue();
-
-        uint256 wholeValueAfterTx = wholeValueBeforeTx.add(baseValueAfterTx).add(quoteValueAfterTx);
+        uint256 wholeValueAfterTx;
+        wholeValueAfterTx = _portfolioValue.add(baseValueAfterTx).add(quoteValueAfterTx);
         wholeValueAfterTx = wholeValueAfterTx.sub(baseValueBeforeTx).sub(quoteValueBeforeTx);
 
         // console.log("whole value is %s", wholeValueAfterTx); // ORACLE_DEBUG
 
-        uint256 baseShareAfterTx = DecimalMath.divFloor(baseValueAfterTx, wholeValueAfterTx);
-        uint256 quoteShareAfterTx = DecimalMath.divFloor(quoteValueAfterTx, wholeValueAfterTx);
+        uint256 baseShare = DecimalMath.divFloor(baseValueAfterTx, wholeValueAfterTx);
+        uint256 quoteShare = DecimalMath.divFloor(quoteValueAfterTx, wholeValueAfterTx);
 
-        return (baseShareAfterTx, quoteShareAfterTx);
-
+        // share of base and quote after tx should be within share limits
+        require(_records[base].min <= baseShare  && baseShare  <= _records[base].max, "BASE OUTSIDE LIMITS" );
+        require(_records[quote].min <= quoteShare && quoteShare <= _records[quote].max, "QUOTE OUTSIDE LIMITS");
     }
 
     function setK(uint256 k) external returns (uint256) {
@@ -957,8 +983,6 @@ contract Storage {
 
     address public _SUPERVISOR_; // could freeze system in emergency
     address public _MAINTAINER_; // collect maintainer fee to buy food for DODO
-
-    mapping(address => uint256) internal _prices;
 
     // ============ Variables for PMM Algorithm ============
 
@@ -1004,7 +1028,7 @@ contract Admin is Storage, LPToken {
         _pushPoolShare(msg.sender, INIT_POOL_SUPPLY);
     }
 
-    function bind(address token, uint256 balance)
+    function bind(address token, uint256 balance, uint256 min, uint256 max)
         external
         _logs_
     // _lock_  Bind does not lock because it jumps to `rebind`, which does
@@ -1020,12 +1044,16 @@ contract Admin is Storage, LPToken {
             index: _tokens.length,
             balance: 0, // and set by `rebind`
             RStatus: Types.RStatus.ONE,
-            targetTokenAmount: 0,
+            target: 0,
             balanceLimit: MAX_INT,
-            token: token
+            token: token,
+            price: 0, // set by `rebind`
+            min: 0, // set by `rebind`
+            max: 0  // set by `rebind`
         });
         _tokens.push(token);
         rebind(token, balance);
+        adjustShareLimits(token, min, max);
     }
 
     function rebind(address token, uint256 balance) public _logs_ _lock_ {
@@ -1038,7 +1066,7 @@ contract Admin is Storage, LPToken {
         // Adjust the balance record and actual token balance
         uint256 oldBalance = _records[token].balance;
         _records[token].balance = balance;
-        _records[token].targetTokenAmount = balance;
+        _records[token].target = balance;
         if (balance > oldBalance) {
             _pullUnderlying(token, msg.sender, bsub(balance, oldBalance));
         } else if (balance < oldBalance) {
@@ -1052,6 +1080,17 @@ contract Admin is Storage, LPToken {
             );
             _pushUnderlying(token, _factory, tokenExitFee);
         }
+    }
+
+    function adjustShareLimits(address token, uint256 min, uint256 max) public {
+        require(msg.sender == _controller, "ERR_NOT_CONTROLLER");
+        require(_records[token].bound, "ERR_NOT_BOUND");
+
+        // Adjust the min and max share limits
+        _records[token].min = min;
+        _records[token].max = max;
+
+        // TODO: check if old balance is outside new limits
     }
 
     function unbind(address token) external _logs_ _lock_ {
@@ -1074,9 +1113,12 @@ contract Admin is Storage, LPToken {
             index: 0,
             balance: 0,
             RStatus: Types.RStatus.ONE,
-            targetTokenAmount: 0,
+            target: 0,
             balanceLimit: MAX_INT,
-            token: token
+            token: token,
+            price: 0,
+            min: 0,
+            max: 0
         });
 
         _pushUnderlying(token, msg.sender, bsub(tokenBalance, tokenExitFee));
@@ -1305,7 +1347,30 @@ contract Pricing is Storage {
 
     // ============ Query Functions ============
 
-    function querySellBaseToken(
+    function querySellBaseToken(address base, address quote, uint256 amount)
+        public view returns ( uint256 receiveQuote,
+                              Types.RStatus newRStatus,
+                              uint256 newQuoteTarget,
+                              uint256 newBaseTarget ) {
+
+        // TODO: update prices from oracles
+
+        return _querySellBaseToken(base, quote, amount);
+    }
+
+    function queryBuyBaseToken(address base, address quote, uint256 amount)
+        public view returns (uint256 payQuote,
+                              Types.RStatus newRStatus,
+                              uint256 newQuoteTarget,
+                              uint256 newBaseTarget) {
+
+        // TODO: update prices from oracles
+
+        return _queryBuyBaseToken(base, quote, amount);
+    }
+
+    // assumes prices are up-to-date
+    function _querySellBaseToken(
         address base,
         address quote,
         uint256 amount
@@ -1322,41 +1387,35 @@ contract Pricing is Storage {
         // console.log("querySellBaseToken (base, quote, amount)"); //PRICE_DEBUG
         // console.log("querySellBaseToken (%s, %s, %s)", base, quote, amount); //PRICE_DEBUG
 
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
-
-        (newBaseTarget, newQuoteTarget) = getExpectedTarget(
-            baseToken.token,
-            quoteToken.token
-        );
+        (newBaseTarget, newQuoteTarget) = getExpectedTarget(base,quote);
 
         uint256 sellBaseAmount = amount;
 
-        // console.log("queryBuyBaseToken: R is %s", mapR(baseToken.RStatus));  //PRICE_DEBUG
+        // console.log("_queryBuyBaseToken: R is %s", mapR(baseToken.RStatus));  //PRICE_DEBUG
 
-        if (baseToken.RStatus == Types.RStatus.ONE) {
+        if (_records[base].RStatus == Types.RStatus.ONE) {
             // case 1: R=1
             // R falls below one
             receiveQuote = _ROneSellBaseToken(
-                baseToken.token,
-                quoteToken.token,
+                base,
+                quote,
                 sellBaseAmount,
                 newQuoteTarget
             );
             newRStatus = Types.RStatus.BELOW_ONE;
-        } else if (baseToken.RStatus == Types.RStatus.ABOVE_ONE) {
-            uint256 backToOnePayBase = newBaseTarget.sub(baseToken.balance);
+        } else if (_records[base].RStatus == Types.RStatus.ABOVE_ONE) {
+            uint256 backToOnePayBase = newBaseTarget.sub(_records[base].balance);
             uint256 backToOneReceiveQuote =
-                quoteToken.balance.sub(newQuoteTarget);
+                _records[quote].balance.sub(newQuoteTarget);
             // case 2: R>1
             // complex case, R status depends on trading amount
             if (sellBaseAmount < backToOnePayBase) {
                 // case 2.1: R status do not change
                 receiveQuote = _RAboveSellBaseToken(
-                    baseToken.token,
-                    quoteToken.token,
-                    sellBaseAmount,
-                    baseToken.balance,
+                    base,
+                    quote,
+                    _records[base].balance,
+                    _records[base].balance,
                     newBaseTarget
                 );
                 newRStatus = Types.RStatus.ABOVE_ONE;
@@ -1373,8 +1432,8 @@ contract Pricing is Storage {
                 // case 2.3: R status changes to BELOW_ONE
                 receiveQuote = backToOneReceiveQuote.add(
                     _ROneSellBaseToken(
-                        baseToken.token,
-                        quoteToken.token,
+                        base,
+                        quote,
                         sellBaseAmount.sub(backToOnePayBase),
                         newQuoteTarget
                     )
@@ -1385,10 +1444,10 @@ contract Pricing is Storage {
             // _R_STATUS_ == Types.RStatus.BELOW_ONE
             // case 3: R<1
             receiveQuote = _RBelowSellBaseToken(
-                baseToken.token,
-                quoteToken.token,
+                base,
+                quote,
                 sellBaseAmount,
-                quoteToken.balance,
+                _records[quote].balance,
                 newQuoteTarget
             );
             newRStatus = Types.RStatus.BELOW_ONE;
@@ -1401,7 +1460,7 @@ contract Pricing is Storage {
         return (receiveQuote, newRStatus, newQuoteTarget, newBaseTarget);
     }
 
-    function queryBuyBaseToken(
+    function _queryBuyBaseToken(
         address base,
         address quote,
         uint256 amount
@@ -1415,11 +1474,8 @@ contract Pricing is Storage {
             uint256 newBaseTarget
         )
     {
-        // console.log("queryBuyBaseToken (base, quote, amount)"); //PRICE_DEBUG
-        // console.log("queryBuyBaseToken (%s, %s, %s)", base, quote, amount); //PRICE_DEBUG
-
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
+        // console.log("_queryBuyBaseToken (base, quote, amount)"); //PRICE_DEBUG
+        // console.log("_queryBuyBaseToken (%s, %s, %s)", base, quote, amount); //PRICE_DEBUG
 
         (newBaseTarget, newQuoteTarget) = getExpectedTarget(base, quote);
 
@@ -1431,41 +1487,41 @@ contract Pricing is Storage {
         // uint256 buyBaseAmount = amount.add(lpFeeBase).add(mtFeeBase);
         uint256 buyBaseAmount = amount;
 
-        // console.log("queryBuyBaseToken: R is %s", getR(base)); //PRICE_DEBUG
+        // console.log("_queryBuyBaseToken: R is %s", getR(base)); //PRICE_DEBUG
 
-        if (baseToken.RStatus == Types.RStatus.ONE) {
+        if (_records[base].RStatus == Types.RStatus.ONE) {
             // case 1: R=1
             payQuote = _ROneBuyBaseToken(
-                baseToken.token,
-                quoteToken.token,
+                base,
+                quote,
                 buyBaseAmount,
                 newBaseTarget
             );
 
             newRStatus = Types.RStatus.ABOVE_ONE;
-        } else if (baseToken.RStatus == Types.RStatus.ABOVE_ONE) {
+        } else if (_records[base].RStatus == Types.RStatus.ABOVE_ONE) {
             // case 2: R>1
             payQuote = _RAboveBuyBaseToken(
-                baseToken.token,
-                quoteToken.token,
+                base,
+                quote,
                 buyBaseAmount,
-                baseToken.balance,
+                _records[base].balance,
                 newBaseTarget
             );
             newRStatus = Types.RStatus.ABOVE_ONE;
-        } else if (baseToken.RStatus == Types.RStatus.BELOW_ONE) {
-            uint256 backToOnePayQuote = newQuoteTarget.sub(quoteToken.balance);
-            uint256 backToOneReceiveBase = baseToken.balance.sub(newBaseTarget);
+        } else if (_records[base].RStatus == Types.RStatus.BELOW_ONE) {
+            uint256 backToOnePayQuote = newQuoteTarget.sub(_records[quote].balance);
+            uint256 backToOneReceiveBase = _records[base].balance.sub(newBaseTarget);
             // case 3: R<1
             // complex case, R status may change
             if (buyBaseAmount < backToOneReceiveBase) {
                 // case 3.1: R status do not change
                 // no need to check payQuote because spare base token must be greater than zero
                 payQuote = _RBelowBuyBaseToken(
-                    baseToken.token,
-                    quoteToken.token,
+                    base,
+                    quote,
                     buyBaseAmount,
-                    quoteToken.balance,
+                    _records[quote].balance,
                     newQuoteTarget
                 );
                 newRStatus = Types.RStatus.BELOW_ONE;
@@ -1477,8 +1533,8 @@ contract Pricing is Storage {
                 // case 3.3: R status changes to ABOVE_ONE
                 payQuote = backToOnePayQuote.add(
                     _ROneBuyBaseToken(
-                        baseToken.token,
-                        quoteToken.token,
+                        base,
+                        quote,
                         buyBaseAmount.sub(backToOneReceiveBase),
                         newBaseTarget
                     )
@@ -1487,8 +1543,8 @@ contract Pricing is Storage {
             }
         }
 
-        // console.log("queryBuyBaseToken: payQuote is %s", payQuote); //PRICE_DEBUG
-        // console.log("queryBuyBaseToken: new R is %s", mapR(newRStatus)); //PRICE_DEBUG
+        // console.log("_queryBuyBaseToken: payQuote is %s", payQuote); //PRICE_DEBUG
+        // console.log("_queryBuyBaseToken: new R is %s", mapR(newRStatus)); //PRICE_DEBUG
 
         // return (payQuote, lpFeeBase, mtFeeBase, newRStatus, newQuoteTarget, newBaseTarget);
         return (payQuote, newRStatus, newQuoteTarget, newBaseTarget);
@@ -1583,7 +1639,7 @@ contract Pricing is Storage {
     ) public view returns (uint256 payQuoteToken) {
         // Here we don't require amount less than some value
         // Because it is limited at upper function
-        // See Trader.queryBuyBaseToken
+        // See Trader._queryBuyBaseToken
         uint256 i = getTransactionPrice(base, quote);
         uint256 Q2 =
             DODOMath._SolveQuadraticFunctionForTrade(
@@ -1596,22 +1652,22 @@ contract Pricing is Storage {
         return Q2.sub(quoteBalance);
     }
 
-    function _RBelowBackToOne(Record memory baseToken, Record memory quoteToken)
+    function _RBelowBackToOne(address base, address quote)
         public
         view
         returns (uint256 payQuoteToken)
     {
         // important: carefully design the system to make sure spareBase always greater than or equal to 0
-        uint256 spareBase = baseToken.balance.sub(baseToken.targetTokenAmount);
-        uint256 price = getTransactionPrice(baseToken.token, quoteToken.token);
+        uint256 spareBase = _records[base].balance.sub(_records[base].target);
+        uint256 price = getTransactionPrice(base, quote);
         uint256 fairAmount = DecimalMath.mul(spareBase, price);
         uint256 newTargetQuote =
             DODOMath._SolveQuadraticFunctionForTarget(
-                baseToken.balance,
+                _records[base].balance,
                 _K_,
                 fairAmount
             );
-        return newTargetQuote.sub(quoteToken.balance);
+        return newTargetQuote.sub(_records[quote].balance);
     }
 
     // ============ R > 1 cases ============
@@ -1642,23 +1698,23 @@ contract Pricing is Storage {
         return _RAboveIntegrate(base, quote, targetBaseAmount, B1, baseBalance);
     }
 
-    function _RAboveBackToOne(Record memory baseToken, Record memory quoteToken)
+    function _RAboveBackToOne(address base, address quote)
         public
         view
         returns (uint256 payBaseToken)
     {
         // important: carefully design the system to make sure spareBase always greater than or equal to 0
         uint256 spareQuote =
-            quoteToken.balance.sub(quoteToken.targetTokenAmount);
-        uint256 price = getTransactionPrice(baseToken.token, quoteToken.token);
+            _records[quote].balance.sub(_records[quote].target);
+        uint256 price = getTransactionPrice(base, quote);
         uint256 fairAmount = DecimalMath.divFloor(spareQuote, price);
         uint256 newTargetBase =
             DODOMath._SolveQuadraticFunctionForTarget(
-                baseToken.balance,
+                _records[base].balance,
                 _K_,
                 fairAmount
             );
-        return newTargetBase.sub(baseToken.balance);
+        return newTargetBase.sub(_records[base].balance);
     }
 
     // ============ Helper functions ============
@@ -1670,24 +1726,21 @@ contract Pricing is Storage {
     {
         // console.log("getExpectedTarget (base, quote)"); //PRICE_DEBUG
 
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
-
-        uint256 Q = quoteToken.balance;
-        uint256 B = baseToken.balance;
+        uint256 Q = _records[quote].balance;
+        uint256 B = _records[base].balance;
 
         // console.log("getExpectedTarget: Base balance is %s, quote balance is %s", Q, B); //PRICE_DEBUG
 
-        if (baseToken.RStatus == Types.RStatus.ONE) {
-            // console.log("getExpectedTarget: Base target is  %s, quote target is  %s", baseToken.targetTokenAmount, quoteToken.targetTokenAmount); //PRICE_DEBUG
+        if (_records[base].RStatus == Types.RStatus.ONE) {
+            // console.log("getExpectedTarget: Base target is  %s, quote target is  %s", baseToken.target, quoteToken.target); //PRICE_DEBUG
 
-            return (baseToken.targetTokenAmount, quoteToken.targetTokenAmount);
-        } else if (baseToken.RStatus == Types.RStatus.BELOW_ONE) {
-            uint256 payQuoteToken = _RBelowBackToOne(baseToken, quoteToken);
-            return (baseToken.targetTokenAmount, Q.add(payQuoteToken));
-        } else if (baseToken.RStatus == Types.RStatus.ABOVE_ONE) {
-            uint256 payBaseToken = _RAboveBackToOne(baseToken, quoteToken);
-            return (B.add(payBaseToken), quoteToken.targetTokenAmount);
+            return (_records[base].target, _records[base].target);
+        } else if (_records[base].RStatus == Types.RStatus.BELOW_ONE) {
+            uint256 payQuoteToken = _RBelowBackToOne(base, quote);
+            return (_records[base].target, Q.add(payQuoteToken));
+        } else if (_records[base].RStatus == Types.RStatus.ABOVE_ONE) {
+            uint256 payBaseToken = _RAboveBackToOne(base, quote);
+            return (B.add(payBaseToken), _records[base].target);
         }
     }
 
@@ -1740,8 +1793,7 @@ contract Trading is Pricing {
         // console.log("sellBaseToken (base, quote, amount, minReceiveQuote)"); //TRADE_DEBUG
         // console.log("sellBaseToken (base, quote, %s, %s)", amount, minReceiveQuote); //TRADE_DEBUG
 
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
+        // TODO: update prices from oracles. Currently assumes prices are up-to-date.
 
         // query price
         (
@@ -1751,7 +1803,7 @@ contract Trading is Pricing {
             Types.RStatus newRStatus,
             uint256 newQuoteTarget,
             uint256 newBaseTarget
-        ) = querySellBaseToken(base, quote, amount);
+        ) = _querySellBaseToken(base, quote, amount);
         // console.log("sellBaseToken: receiveQuote is %s", receiveQuote); //TRADE_DEBUG
 
         require(
@@ -1761,42 +1813,30 @@ contract Trading is Pricing {
 
         // console.log("baseShare is %s, quoteShare is %s", getCurrentShare(base), getCurrentShare(quote)); // ORACLE_DEBUG
 
-        // calculate share after tx
-        // share needs base after transaction and quote balance after transaction
-        // it will calculate value of base balanceAfterTx
-        // it will calculate value of portfolio
-        // add up all assets,
-        // subtract balancesBeforeTx of base and quote
-        // add balancesAfterTx
-        // divide baseValue by wholeValue
-        (uint256 baseShare,
-         uint256 quoteShare) = getShare(base,
-                                        quote,
-                                        baseToken.balance + amount,
-                                        quoteToken.balance - receiveQuote
-                                        );
+        updatePortfolioValue();
+
+        checkSharesAfterTx(base,
+                           quote,
+                           _records[base].balance + amount,
+                           _records[quote].balance - receiveQuote
+                           );
 
         // console.log("baseShare will be %s, quoteShare will be %s", baseShare, quoteShare); // ORACLE_DEBUG
 
-        // TODO: move share limits to asset records
-        // share of base and quote after tx should be within share limits
-        uint256 ONE = 10**18;
-        require(3*ONE/10 <= baseShare  && baseShare  <= 7*ONE/10, "BASE OUTSIDE LIMITS" );
-        require(3*ONE/10 <= quoteShare && quoteShare <= 7*ONE/10, "QUOTE OUTSIDE LIMITS");
         // settle assets
         _quoteTokenTransferOut(quote, msg.sender, receiveQuote);
 
         _baseTokenTransferIn(base, msg.sender, amount);
 
         // update TARGET
-        if (quoteToken.targetTokenAmount != newQuoteTarget) {
-            quoteToken.targetTokenAmount = newQuoteTarget;
+        if (_records[quote].target != newQuoteTarget) {
+            _records[quote].target = newQuoteTarget;
         }
-        if (baseToken.targetTokenAmount != newBaseTarget) {
-            baseToken.targetTokenAmount = newBaseTarget;
+        if (_records[base].target != newBaseTarget) {
+            _records[base].target = newBaseTarget;
         }
-        if (baseToken.RStatus != newRStatus) {
-            baseToken.RStatus = newRStatus;
+        if (_records[base].RStatus != newRStatus) {
+            _records[base].RStatus = newRStatus;
         }
 
         // _donateQuoteToken(lpFeeQuote);
@@ -1811,8 +1851,8 @@ contract Trading is Pricing {
         uint256 amount,
         uint256 maxPayQuote
     ) external preventReentrant returns (uint256) {
-        Record memory baseToken = _records[base];
-        Record memory quoteToken = _records[quote];
+
+        // TODO: update prices from oracles. Currently assumes prices are up-to-date.
 
         // query price
         (
@@ -1820,8 +1860,16 @@ contract Trading is Pricing {
             Types.RStatus newRStatus,
             uint256 newQuoteTarget,
             uint256 newBaseTarget
-        ) = queryBuyBaseToken(base, quote, amount);
+        ) = _queryBuyBaseToken(base, quote, amount);
         require(payQuote <= maxPayQuote, "BUY_BASE_COST_TOO_MUCH");
+
+        updatePortfolioValue();
+
+        checkSharesAfterTx(base,
+                           quote,
+                           _records[base].balance - amount,
+                           _records[quote].balance + payQuote
+                           );
 
         // settle assets
         _baseTokenTransferOut(base, msg.sender, amount);
@@ -1829,14 +1877,14 @@ contract Trading is Pricing {
         _quoteTokenTransferIn(quote, msg.sender, payQuote);
 
         // update TARGET
-        if (quoteToken.targetTokenAmount != newQuoteTarget) {
-            quoteToken.targetTokenAmount = newQuoteTarget;
+        if (_records[quote].target != newQuoteTarget) {
+            _records[quote].target = newQuoteTarget;
         }
-        if (baseToken.targetTokenAmount != newBaseTarget) {
-            baseToken.targetTokenAmount = newBaseTarget;
+        if (_records[base].target != newBaseTarget) {
+            _records[base].target = newBaseTarget;
         }
-        if (baseToken.RStatus != newRStatus) {
-            baseToken.RStatus = newRStatus;
+        if (_records[base].RStatus != newRStatus) {
+            _records[base].RStatus = newRStatus;
         }
 
         // _donateBaseToken(lpFeeBase);
@@ -1853,13 +1901,13 @@ contract Trading is Pricing {
         uint256 amount
     ) public {
         // console.log("_baseTokenTransferIn (base, from, amount)"); //TRADE_DEBUG
-        Record memory baseToken = _records[base];
+
         require(
-            baseToken.balance.add(amount) <= baseToken.balanceLimit,
+            _records[base].balance.add(amount) <= _records[base].balanceLimit,
             "BASE_BALANCE_LIMIT_EXCEEDED"
         );
         IERC20(base).transferFrom(from, address(this), amount);
-        baseToken.balance = baseToken.balance.add(amount);
+        _records[base].balance = _records[base].balance.add(amount);
         // console.log("_baseTokenTransferIn baseBalance is %s", baseToken.balance); //TRADE_DEBUG
     }
 
@@ -1869,13 +1917,13 @@ contract Trading is Pricing {
         uint256 amount
     ) public {
         // console.log("_quoteTokenTransferIn (quote, from, amount)"); //TRADE_DEBUG
-        Record memory quoteToken = _records[quote];
+
         require(
-            quoteToken.balance.add(amount) <= quoteToken.balanceLimit,
+            _records[quote].balance.add(amount) <= _records[quote].balanceLimit,
             "QUOTE_BALANCE_LIMIT_EXCEEDED"
         );
         IERC20(quote).transferFrom(from, address(this), amount);
-        quoteToken.balance = quoteToken.balance.add(amount);
+        _records[quote].balance = _records[quote].balance.add(amount);
     }
 
     function _baseTokenTransferOut(
@@ -1884,9 +1932,9 @@ contract Trading is Pricing {
         uint256 amount
     ) public {
         // console.log("_baseTokenTransferOut (base, to, amount)"); //TRADE_DEBUG
-        Record memory baseToken = _records[base];
+
         IERC20(base).transfer(to, amount);
-        baseToken.balance = baseToken.balance.sub(amount);
+        _records[base].balance = _records[base].balance.sub(amount);
     }
 
     function _quoteTokenTransferOut(
@@ -1895,9 +1943,8 @@ contract Trading is Pricing {
         uint256 amount
     ) public {
         // console.log("_quoteTokenTransferOut (quote, to, amount)"); //TRADE_DEBUG
-        Record memory quoteToken = _records[quote];
         IERC20(quote).transfer(to, amount);
-        quoteToken.balance = quoteToken.balance.sub(amount);
+        _records[quote].balance = _records[quote].balance.sub(amount);
         // console.log("_quoteTokenTransferOut quoteBalance is %s", quoteToken.balance); //TRADE_DEBUG
     }
 
