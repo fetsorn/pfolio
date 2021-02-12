@@ -10,8 +10,8 @@ Built with the awesome [[https://hardhat.org/][hardhat]] framework and templates
 # Run tests
 ❯ npx hardhat test
 
-# Deploy and debug in console
-❯ npx hardhat node
+# Deploy locally for testing in browser
+❯ npx hardhat node &
 ❯ npx hardhat run --network localhost scripts/deploy.js
-❯ npx hardhat console --network localhost
+❯ open index.html
 #+end_src
