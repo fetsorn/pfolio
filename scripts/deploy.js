@@ -44,6 +44,7 @@ async function main() {
 
   await pfolio.setOraclePrice(token1.address, price);
   await pfolio.setOraclePrice(token2.address, price);
+  await pfolio.setOraclePrice(token3.address, price);
 
 }
 

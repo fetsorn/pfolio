@@ -2883,7 +2883,8 @@ const abiERC = JSON.parse(`
 `);
 
 const ten = ethers.BigNumber.from("10");
-const tradeOne = ten.pow(11);
+const tradePow = 11; // decimals of one token
+const tradeOne = ten.pow(tradePow); // one token
 
 provider = new ethers.providers.JsonRpcProvider()
 signer = provider.getSigner(0);
@@ -2896,9 +2897,9 @@ token3 = new ethers.Contract('0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9', abiER
 
 function numberIt(str) {
     //number before the decimal point
-    num = str.substring(0,str.length-11);
+    num = str.substring(0,str.length-tradePow);
     //number after the decimal point
-    dec = str.substring(str.length-11,str.length-1)
+    dec = str.substring(str.length-tradePow,str.length-1)
     //connect both parts while comma-ing the first half
     output = num + "." + dec;
 
@@ -2913,6 +2914,9 @@ function update() {
     token2.balanceOf(signerAddress).then((f) => {
         $("#balance2").html(numberIt(f.toString()));
     });
+    token3.balanceOf(signerAddress).then((f) => {
+        $("#balance3").html(numberIt(f.toString()));
+    });
 
     pfolio.getBalance(token1.address).then((f) => {
         $("#reserve1").html(numberIt(f.toString()));
@@ -2920,23 +2924,38 @@ function update() {
     pfolio.getBalance(token2.address).then((f) => {
         $("#reserve2").html(numberIt(f.toString()));
     });
+    pfolio.getBalance(token3.address).then((f) => {
+        $("#reserve3").html(numberIt(f.toString()));
+    });
 
 }
 
-function buyBaseToken() {
+function buyBaseToken(q) {
 
-    buyAmount = $("#buy").val();
+    if (q === 2) {
+        quote = token2.address;
+    } else if (q === 3) {
+        quote = token3.address;
+    }
 
-    pfolio.buyBaseToken(token1.address, token2.address, tradeOne.mul(5), ten.pow(17));
+    buyAmount = $("#amount").val();
+
+    pfolio.buyBaseToken(token1.address, quote, tradeOne.mul(buyAmount), ten.pow(17));
 
     update();
 }
 
-function sellBaseToken() {
+function sellBaseToken(q) {
 
-    sellAmount = $("#sell").val();
+    if (q === 2) {
+        quote = token2.address;
+    } else if (q === 3) {
+        quote = token3.address;
+    }
 
-    pfolio.sellBaseToken(token1.address, token2.address, tradeOne.mul(5), 1);
+    sellAmount = $("#amount").val();
+
+    pfolio.sellBaseToken(token1.address, quote, tradeOne.mul(sellAmount), 1);
 
     update();
 }

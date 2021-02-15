@@ -13,42 +13,25 @@
     <tr>
      <th>Asset</th>
      <th>Balance</th>
-    </tr>
-   </thead>
-   <tbody>
-    <tr>
-     <td>Gold</td>
-     <td id="balance1"></td>
-    </tr>
-    <tr>
-     <td>Silver</td>
-     <td id="balance2"></td>
-    </tr>
-   </tbody>
-  </table>
- </div>
- <div class="table-responsive">
-  <table class="table table-bordered">
-   <thead>
-    <tr>
-     <th>Asset</th>
      <th>Reserve</th>
     </tr>
    </thead>
    <tbody>
     <tr>
      <td>Gold</td>
+     <td id="balance1"></td>
      <td id="reserve1"></td>
     </tr>
     <tr>
      <td>Silver</td>
+     <td id="balance2"></td>
      <td id="reserve2"></td>
     </tr>
    </tbody>
   </table>
  </div>
- <input type="text" id="buy" />
- <a href="#" onclick="buyBaseToken()" class="btn btn-primary">Buy gold</a> <a href="#" onclick="sellBaseToken()" class="btn btn-primary">Sell gold</a>
+ <input type="text" id="amount" />
+ <a href="#" onclick="buyBaseToken(2)" class="btn btn-primary">Buy gold</a> <a href="#" onclick="sellBaseToken(2)" class="btn btn-primary">Sell gold</a>
 </body>
 <script charset="utf-8"
         src="https://cdn.ethers.io/lib/ethers-5.0.umd.min.js"

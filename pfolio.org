@@ -6,13 +6,18 @@
 \(^\)\( *\)\(.*\)\(PRICE_DEBUG\) → \1\2// \3\4
 \(^\)\( *\)\(// \)\(.*\)\(PRICE_DEBUG\) → \1\2\4\5
 
+#+begin_src sh
+tmux
+npx network node
+npx network run --network localhost scripts/deploy.js
+#+end_src
 # initial setup for hardhat console
 #+begin_src js
 const account = await ethers.getSigners().then((accounts) => accounts[0].address);
-const pfolio = await ethers.getContractAt("PFOLIO", "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512");
-const token1 = await ethers.getContractAt("ERC20PresetMinterPauser", "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0");
-const token2 = await ethers.getContractAt("ERC20PresetMinterPauser", "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9");
-const token3 = await ethers.getContractAt("ERC20PresetMinterPauser", "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9");
+const pfolio = await ethers.getContractAt("PFOLIO", "0x5FbDB2315678afecb367f032d93F642f64180aa3");
+const token1 = await ethers.getContractAt("ERC20PresetMinterPauser", "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512");
+const token2 = await ethers.getContractAt("ERC20PresetMinterPauser", "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0");
+const token3 = await ethers.getContractAt("ERC20PresetMinterPauser", "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9");
 tstr = (n) => n.toString();
 await pfolio.getBalance(token1.address).then(tstr);
 let ONE = Math.pow(10, 18);
