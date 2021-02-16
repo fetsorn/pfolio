@@ -128,7 +128,7 @@ describe("PFOLIO V2 minmax", function () {
     return expect(
       pfolio.sellBaseToken(token1.address, token2.address, tradeOne.mul(5), 1)
     ).to.be.rejectedWith(
-      "VM Exception while processing transaction: revert BASE OUTSIDE LIMIT"
+      "VM Exception while processing transaction: revert GAIN OUTSIDE MAX"
     );
   });
 });

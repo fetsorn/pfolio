@@ -922,50 +922,49 @@ contract Storage {
 
     // assumes asset prices and _portfolioValue are up-to-date
     function checkSharesAfterTx(
-        address base,
-        address quote,
-        uint256 baseBalanceAfterTx,
-        uint256 quoteBalanceAfterTx
+        address gain,
+        address loss,
+        uint256 gainReserveAfterTx,
+        uint256 lossReserveAfterTx
     ) public view {
         // take price of token1 in usd
         // take price of all tokens in usd - in state?
-        /// add all shares of tokens from balances
+        /// add all shares of tokens from reserves
         // decimal divide
 
-        uint256 baseValueBeforeTx =
-            _records[base].balance.mul(_records[base].price);
-        uint256 quoteValueBeforeTx =
-            _records[quote].balance.mul(_records[quote].price);
+        uint256 gainValueBeforeTx =
+            _records[gain].balance.mul(_records[gain].price);
+        uint256 lossValueBeforeTx =
+            _records[loss].balance.mul(_records[loss].price);
 
-        uint256 baseValueAfterTx = baseBalanceAfterTx.mul(_records[base].price);
-        uint256 quoteValueAfterTx =
-            quoteBalanceAfterTx.mul(_records[quote].price);
+        uint256 gainValueAfterTx = gainReserveAfterTx.mul(_records[gain].price);
+        uint256 lossValueAfterTx =
+            lossReserveAfterTx.mul(_records[loss].price);
 
         // console.log("token value is %s", value); // ORACLE_DEBUG
-        uint256 wholeValueAfterTx;
-        wholeValueAfterTx = _portfolioValue.add(baseValueAfterTx).add(
-            quoteValueAfterTx
+        uint256 portfolioValueAfterTx;
+        portfolioValueAfterTx = _portfolioValue.add(gainValueAfterTx).add(
+            lossValueAfterTx
         );
-        wholeValueAfterTx = wholeValueAfterTx.sub(baseValueBeforeTx).sub(
-            quoteValueBeforeTx
+        portfolioValueAfterTx = portfolioValueAfterTx.sub(gainValueBeforeTx).sub(
+            lossValueBeforeTx
         );
 
         // console.log("whole value is %s", wholeValueAfterTx); // ORACLE_DEBUG
 
-        uint256 baseShare =
-            DecimalMath.divFloor(baseValueAfterTx, wholeValueAfterTx);
-        uint256 quoteShare =
-            DecimalMath.divFloor(quoteValueAfterTx, wholeValueAfterTx);
+        uint256 gainShareAfterTx =
+            DecimalMath.divFloor(gainValueAfterTx, portfolioValueAfterTx);
+        uint256 lossShareAfterTx =
+            DecimalMath.divFloor(lossValueAfterTx, portfolioValueAfterTx);
 
         // share of base and quote after tx should be within share limits
         require(
-            _records[base].min <= baseShare && baseShare <= _records[base].max,
-            "BASE OUTSIDE LIMITS"
+            gainShareAfterTx <= _records[gain].max,
+            "GAIN OUTSIDE MAX"
         );
         require(
-            _records[quote].min <= quoteShare &&
-                quoteShare <= _records[quote].max,
-            "QUOTE OUTSIDE LIMITS"
+            _records[loss].min <= lossShareAfterTx,
+            "LOSS OUTSIDE MIN"
         );
     }
 
@@ -1888,10 +1887,10 @@ contract Trading is Pricing {
         updatePortfolioValue();
 
         checkSharesAfterTx(
-            base,
             quote,
-            _records[base].balance - amount,
-            _records[quote].balance + payQuote
+            base,
+            _records[quote].balance + payQuote,
+            _records[base].balance - amount
         );
 
         // settle assets

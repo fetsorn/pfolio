@@ -19,8 +19,8 @@ async function main() {
   const fundSize2 = reserveSize2.add(tradeSize.mul(100));
   const fundSize3 = reserveSize3.add(tradeSize.mul(100));
 
-  const min = PERCENT.mul(1).div(10000);
-  const max = PERCENT.mul(100).mul(10000);
+  const min = PERCENT.mul(30);
+  const max = PERCENT.mul(70);
 
   // get default account
   const account = await ethers.getSigners().then((as) => as[0].address);
