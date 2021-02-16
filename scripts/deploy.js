@@ -6,10 +6,21 @@ async function main() {
   const ONE = ten.pow(18);
   const PERCENT = ONE.div(100);
 
-  const fundSize = ten.pow(17).add(ten.pow(13));
-  const bindSize = ten.pow(17).mul(1);
-  const min = PERCENT.mul(30);
-  const max = PERCENT.mul(70);
+  const tradeSize = ten.pow(18);
+
+  const baseSize = tradeSize.mul(tradeSize);
+  const quotSize = tradeSize.mul(tradeSize);
+
+  const reserveSize1 = baseSize;
+  const reserveSize2 = quotSize;
+  const reserveSize3 = quotSize;
+
+  const fundSize1 = reserveSize1.add(tradeSize.mul(100));
+  const fundSize2 = reserveSize2.add(tradeSize.mul(100));
+  const fundSize3 = reserveSize3.add(tradeSize.mul(100));
+
+  const min = PERCENT.mul(1).div(10000);
+  const max = PERCENT.mul(100).mul(10000);
 
   // get default account
   const account = await ethers.getSigners().then((as) => as[0].address);
@@ -27,17 +38,17 @@ async function main() {
   console.log("token2 deployed to:", token2.address)
   console.log("token3 deployed to:", token3.address)
 
-  await token1.mint(account, fundSize);
-  await token2.mint(account, fundSize);
-  await token3.mint(account, fundSize);
+  await token1.mint(account, fundSize1);
+  await token2.mint(account, fundSize2);
+  await token3.mint(account, fundSize3);
 
-  await token1.approve(pfolio.address, fundSize);
-  await token2.approve(pfolio.address, fundSize);
-  await token3.approve(pfolio.address, fundSize);
+  await token1.approve(pfolio.address, fundSize1);
+  await token2.approve(pfolio.address, fundSize2);
+  await token3.approve(pfolio.address, fundSize3);
 
-  await pfolio.bind(token1.address, bindSize, min, max);
-  await pfolio.bind(token2.address, bindSize, min, max);
-  await pfolio.bind(token3.address, bindSize, min, max);
+  await pfolio.bind(token1.address, reserveSize1, min, max);
+  await pfolio.bind(token2.address, reserveSize2, min, max);
+  await pfolio.bind(token3.address, reserveSize3, min, max);
 
   priceOne = ten.pow(18);
   const price = priceOne.mul(1);

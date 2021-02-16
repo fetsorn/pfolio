@@ -37,6 +37,11 @@ task("balance1", "Prints first account's balance", async () => {
  * @type import('hardhat/config').HardhatUserConfig
  */
 module.exports = {
+  networks: {
+    localhost9: {
+      url: "http://127.0.0.1:9545"
+    }
+  },
   solidity: {
     compilers: [
       {

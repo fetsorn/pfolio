@@ -11,7 +11,7 @@ Built with the awesome [[https://hardhat.org/][hardhat]] framework and templates
 ❯ npx hardhat test
 
 # Deploy locally for testing in browser
-❯ npx hardhat node &
-❯ npx hardhat run --network localhost scripts/deploy.js
+❯ pkill -f hardhat
+❯ ./run_nodes.sh
 ❯ open index.html
 #+end_src

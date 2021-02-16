@@ -7,10 +7,10 @@
 \(^\)\( *\)\(// \)\(.*\)\(PRICE_DEBUG\) → \1\2\4\5
 
 #+begin_src sh
-tmux
-npx network node
-npx network run --network localhost scripts/deploy.js
+pkill -f hardhat
+./run_nodes.sh
 #+end_src
+
 # initial setup for hardhat console
 #+begin_src js
 const account = await ethers.getSigners().then((accounts) => accounts[0].address);

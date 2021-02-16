@@ -2883,17 +2883,29 @@ const abiERC = JSON.parse(`
 `);
 
 const ten = ethers.BigNumber.from("10");
-const tradePow = 11; // decimals of one token
+const tradePow = 18; // decimals of one token
 const tradeOne = ten.pow(tradePow); // one token
 
-provider = new ethers.providers.JsonRpcProvider()
-signer = provider.getSigner(0);
-signerAddress = signer.getAddress();
+let signerAddress;
+let pfolio;
+let token1;
+let token2;
+let token3;
 
-pfolio = new ethers.Contract('0x5FbDB2315678afecb367f032d93F642f64180aa3', abiPFOLIO, signer);
-token1 = new ethers.Contract('0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512', abiERC, signer);
-token2 = new ethers.Contract('0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0', abiERC, signer);
-token3 = new ethers.Contract('0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9', abiERC, signer);
+function chooseNetwork(port) {
+
+    provider = new ethers.providers.JsonRpcProvider("http://127.0.0.1:" + port);
+
+    signer = provider.getSigner(0);
+    signerAddress = signer.getAddress();
+
+    pfolio = new ethers.Contract('0x5FbDB2315678afecb367f032d93F642f64180aa3', abiPFOLIO, signer);
+    token1 = new ethers.Contract('0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512', abiERC, signer);
+    token2 = new ethers.Contract('0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0', abiERC, signer);
+    token3 = new ethers.Contract('0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9', abiERC, signer);
+
+    update();
+}
 
 function numberIt(str) {
     //number before the decimal point
@@ -2930,24 +2942,43 @@ function update() {
 
 }
 
-function buyBaseToken(q) {
+function buyBaseToken(b,q) {
 
-    if (q === 2) {
+    if (b === 1) {
+        base = token1.address;
+    } else if (b === 2) {
+        base = token2.address;
+    } else if (b === 3) {
+        base = token3.address;
+    }
+
+    if (q === 1) {
+        quote = token1.address;
+    } else if (q === 2) {
         quote = token2.address;
-    } else if (q === 3) {
-        quote = token3.address;
+    } else if (q === 3) {quote = token3.address;
     }
 
     buyAmount = $("#amount").val();
 
-    pfolio.buyBaseToken(token1.address, quote, tradeOne.mul(buyAmount), ten.pow(17));
+    pfolio.buyBaseToken(base, quote, tradeOne.mul(buyAmount), tradeOne.mul(10000));
 
     update();
 }
 
-function sellBaseToken(q) {
+function sellBaseToken(b,q) {
 
-    if (q === 2) {
+    if (b === 1) {
+        base = token1.address;
+    } else if (b === 2) {
+        base = token2.address;
+    } else if (b === 3) {
+        base = token3.address;
+    }
+
+    if (q === 1) {
+        quote = token1.address;
+    } else if (q === 2) {
         quote = token2.address;
     } else if (q === 3) {
         quote = token3.address;
@@ -2955,13 +2986,13 @@ function sellBaseToken(q) {
 
     sellAmount = $("#amount").val();
 
-    pfolio.sellBaseToken(token1.address, quote, tradeOne.mul(sellAmount), 1);
+    pfolio.sellBaseToken(base, quote, tradeOne.mul(sellAmount), 1);
 
     update();
 }
 
 $(document).ready(function() {
 
-    update();
+    chooseNetwork(document.getElementById("network").value);
 
 });
