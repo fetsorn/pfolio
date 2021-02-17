@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.6.9;
+pragma solidity >0.6.9 <0.8.0;
 pragma experimental ABIEncoderV2;
 
 import "hardhat/console.sol";
@@ -929,7 +929,7 @@ contract Storage {
     ) public view {
         // take price of token1 in usd
         // take price of all tokens in usd - in state?
-        /// add all shares of tokens from reserves
+        // add all shares of tokens from reserves
         // decimal divide
 
         uint256 gainValueBeforeTx =
@@ -2181,7 +2181,7 @@ contract LiquidityProvider is Storage, LPToken {
     }
 }
 
-contract PFOLIO is LiquidityProvider, Trading, Admin {
+contract PFOLIO is Trading, Admin {
     constructor() public {
         _controller = msg.sender;
         _factory = msg.sender;
